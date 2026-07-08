@@ -14,3 +14,9 @@ seaborn==0.13.2
 beautifulsoup4==4.12.3
 sentencepiece
 protobuf
+pyarrow
+fastparquet
+scikit-learn
+pandas
+matplotlib
+google-genai

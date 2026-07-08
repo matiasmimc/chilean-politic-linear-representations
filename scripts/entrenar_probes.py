@@ -9,15 +9,25 @@ from pathlib import Path
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent
-RESULTS_DIR = BASE_DIR / "results_replication"
+RESULTS_DIR = BASE_DIR / "results/replication/v2"
 
 def main():
-    models = ['meta-llama/Llama-2-7b-chat-hf', 'mistralai/Mistral-7B-Instruct-v0.1', 'lmsys/vicuna-7b-v1.5']
-
+    models = [
+        'meta-llama/Meta-Llama-3-8B-Instruct', 
+        'mistralai/Mistral-7B-Instruct-v0.3', 
+        'Qwen/Qwen2.5-7B-Instruct',
+        'failspy/Meta-Llama-3-8B-Instruct-abliterated-v3'
+    ]
     for model_name in models:
         print(f"\n--- Entrenando Probes para: {model_name} ---")
         safe_name = model_name.replace("/", "_")
         features_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+        perf_path = RESULTS_DIR / f"{safe_name}_politician_performance.pkl"
+        model_path = RESULTS_DIR / f"{safe_name}_ridge.pkl"
+        
+        if perf_path.exists() and model_path.exists():
+            print(f"Probes ya entrenadas para {model_name}. Saltando...")
+            continue
         
         if not features_path.exists():
             print(f"Error: No se encuentra {features_path}. Ejecuta extraer_activaciones.py primero.")
@@ -25,6 +35,15 @@ def main():
 
         with open(features_path, 'rb') as f:
             features, labels = pickle.load(f)
+
+        # 1. Filter out samples with NaN labels
+        valid_idx = ~np.isnan(labels)
+        features = features[valid_idx]
+        labels = labels[valid_idx]
+
+        # 2. Replace NaNs in features with 0.0 (happens with float16 overflow in some models)
+        if np.isnan(features).any():
+            features = np.nan_to_num(features, nan=0.0)
 
         # features: [num_statements, layers, heads, d_head]
         num_statements, num_layers, num_heads, d_head = features.shape

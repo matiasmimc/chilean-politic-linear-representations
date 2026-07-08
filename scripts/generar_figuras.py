@@ -9,7 +9,7 @@ from pathlib import Path
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent
-RESULTS_DIR = BASE_DIR / "results_replication"
+RESULTS_DIR = BASE_DIR / "results/replication/v2"
 FIGURES_DIR = BASE_DIR / "figures"
 
 # Asegurar que el directorio de figuras existe
@@ -92,7 +92,12 @@ def generar_figura_3(models):
         print(f"Figura de intervención para {model_name} guardada.")
 
 def main():
-    models = ['meta-llama/Llama-2-7b-chat-hf', 'mistralai/Mistral-7B-Instruct-v0.1', 'lmsys/vicuna-7b-v1.5']
+    models = [
+        'meta-llama/Meta-Llama-3-8B-Instruct', 
+        'mistralai/Mistral-7B-Instruct-v0.3', 
+        'Qwen/Qwen2.5-7B-Instruct',
+        'failspy/Meta-Llama-3-8B-Instruct-abliterated-v3'
+    ]
     
     generar_figura_2(models)
     generar_figura_3(models)

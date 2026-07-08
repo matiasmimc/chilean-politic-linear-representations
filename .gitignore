@@ -1,3 +1,7 @@
 *.pyc
 *.pyo
 __pycache__/
+.env
+.venv
+results/
+*.tar.gz

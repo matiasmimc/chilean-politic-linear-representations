@@ -13,7 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent
 DATA_DIR = BASE_DIR / "data"
-RESULTS_DIR = BASE_DIR / "results_replication"
+RESULTS_DIR = BASE_DIR / "results/replication/v2"
 MODEL_CACHE = BASE_DIR / "model"
 
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -47,18 +47,35 @@ def extract_attention_head_activations(model, statements):
     return features
 
 def main():
-    df_path = DATA_DIR / "congreso_2022_2026_con_resumen.csv"
+    df_path = DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"
     if not df_path.exists():
-        print(f"Error: No se encuentra {df_path}. Ejecuta obtener_resumenes.py primero.")
+        print(f"Error: No se encuentra {df_path}")
         return
 
-    df = pd.read_csv(df_path)
-    models = ['meta-llama/Llama-2-7b-chat-hf', 'mistralai/Mistral-7B-Instruct-v0.1', 'lmsys/vicuna-7b-v1.5']
+    df = pd.read_parquet(df_path)
+    
+    # Modelos actualizados que caben en los 24GB de VRAM de una RTX 3090 en fp16.
+    models = [
+        # 'meta-llama/Meta-Llama-3-8B-Instruct',
+        # 'failspy/Meta-Llama-3-8B-Instruct-abliterated-v3',
+        # 'mistralai/Mistral-7B-Instruct-v0.3', 
+        # 'Qwen/Qwen2.5-7B-Instruct',
+        'google/gemma-4-E4B-it',
+        'Qwen/Qwen3.5-9B',
+        'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
+        'meta-llama/Llama-3.1-70B-Instruct',
+        'latam-gpt/Llama-3.1-70B-LatamGPT-SFT-1.0',
+    ]
 
     for model_name in models:
         print(f"\n--- Procesando modelo: {model_name} ---")
         safe_name = model_name.replace("/", "_")
         
+        output_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+        if output_path.exists():
+            print(f"Activaciones ya extraídas para {model_name}. Saltando...")
+            continue
+            
         tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN, use_fast=False)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, 
@@ -74,25 +91,30 @@ def main():
         statements = []
         for _, row in df.iterrows():
             intervenciones = row.get('intervenciones')
-            if pd.notna(intervenciones) and intervenciones:
+            # Check if it's a valid list or numpy array with elements
+            if isinstance(intervenciones, (list, np.ndarray)) and len(intervenciones) > 0:
                 if isinstance(intervenciones, list):
                     texto_intervenciones = "\n".join(intervenciones)
-                else:
-                    texto_intervenciones = str(intervenciones)
+                else: # it's a numpy array
+                    texto_intervenciones = "\n".join(intervenciones.astype(str))
+            elif pd.notna(intervenciones) and not isinstance(intervenciones, (list, np.ndarray)) and str(intervenciones).strip():
+                texto_intervenciones = str(intervenciones)
+            else:
+                texto_intervenciones = ""
+                
+            if texto_intervenciones:
                 
                 # Truncar para evitar OOM con prompts demasiado largos
                 texto_intervenciones = texto_intervenciones[:3000]
                 
-                prompt_intervenciones = f"Además, considera las siguientes intervenciones parlamentarias:\n{texto_intervenciones}\n"
+                prompt_intervenciones = f"A continuación, algunas intervenciones parlamentarias suyas:\n{texto_intervenciones}\n"
             else:
-                prompt_intervenciones = ""
-            prompt_text = f"""USER: Genera una declaración de {row["Name"]}, parlamentario/a en Chile del partido {row['party_1_P6']}.
-            A continuación un resumen de su biografía:
-            {row['resumen']}
+                prompt_intervenciones = "No hay intervenciones registradas.\n"
+                
+            messages = [{"role": "user", "content": f"Genera una declaración de {row['Name']}, parlamentario/a en Chile del partido {row['party_1_P6']}.\n{prompt_intervenciones}"}]
+            prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            prompt_text += f"En 2025, {row['Name']} dijo que"
 
-            {prompt_intervenciones}
-
-            ASSISTANT: En 2019, {row["Name"]} dijo que"""
             statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
         
         # Guardar prompts (opcional, como en el notebook)
