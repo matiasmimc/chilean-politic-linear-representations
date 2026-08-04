@@ -20,22 +20,62 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
 
+def get_attention_heads(model):
+    layers = None
+    prefix = ""
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        layers = model.model.layers
+        prefix = "model.layers"
+    elif hasattr(model, "model") and hasattr(model.model, "language_model") and hasattr(model.model.language_model, "layers"):
+        layers = model.model.language_model.layers
+        prefix = "model.language_model.layers"
+    elif hasattr(model, "language_model") and hasattr(model.language_model, "model") and hasattr(model.language_model.model, "layers"):
+        layers = model.language_model.model.layers
+        prefix = "language_model.model.layers"
+    elif hasattr(model, "layers"):
+        layers = model.layers
+        prefix = "layers"
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        layers = model.transformer.h
+        prefix = "transformer.h"
+        
+    if layers is None:
+        raise ValueError(f"No se pudo localizar el bloque de capas del modelo de lenguaje para {type(model).__name__}")
+        
+    heads = []
+    for i, layer in enumerate(layers):
+        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
+            heads.append(f"{prefix}.{i}.self_attn.o_proj")
+            
+    if not heads:
+        raise ValueError(f"No se encontraron capas con 'self_attn.o_proj' en {type(model).__name__}")
+        
+    return heads
+
+
 def extract_attention_head_activations(model, statements):
-    HEADS = [f"model.layers.{i}.self_attn.o_proj" for i in range(model.config.num_hidden_layers)]
+    HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
     for prompt in tqdm(statements, desc="Extracting activations", total=len(statements)):
         # prompt is likely a tensor [1, seq_len]
         with torch.no_grad():
             with TraceDict(model, HEADS) as ret:
-                _ = model(prompt.to(model.device), output_hidden_states=True, output_attentions=True)
+                _ = model(prompt.to(model.device))
                 # output from o_proj is [batch, seq, hidden_dim]
-                head_wise_hidden_states = [ret[head].output.squeeze().detach().cpu() for head in HEADS]
+                head_wise_hidden_states = [ret[head].output.squeeze().detach().float().cpu() for head in HEADS]
                 head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim=0).numpy() # [layers, seq, hidden]
                 head_wise_hidden_states_list.append(head_wise_hidden_states)
     
     features = []
-    num_heads = model.config.num_attention_heads
+    num_heads = getattr(model.config, "num_attention_heads", None)
+    if num_heads is None and hasattr(model.config, "text_config"):
+        num_heads = getattr(model.config.text_config, "num_attention_heads", None)
+    if num_heads is None:
+        num_heads = getattr(model.config, "n_head", None)
+    if num_heads is None:
+        raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
+        
     for head_wise_hidden_states in head_wise_hidden_states_list:
         # We take the state of the last token in the sequence
         last_token_states = head_wise_hidden_states[:, -1, :] # [layers, hidden]
@@ -56,15 +96,11 @@ def main():
     
     # Modelos actualizados que caben en los 24GB de VRAM de una RTX 3090 en fp16.
     models = [
-        # 'meta-llama/Meta-Llama-3-8B-Instruct',
-        # 'failspy/Meta-Llama-3-8B-Instruct-abliterated-v3',
-        # 'mistralai/Mistral-7B-Instruct-v0.3', 
-        # 'Qwen/Qwen2.5-7B-Instruct',
         'google/gemma-4-E4B-it',
+        'meta-llama/Llama-3.1-8B-Instruct',
         'Qwen/Qwen3.5-9B',
-        'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
-        'meta-llama/Llama-3.1-70B-Instruct',
-        'latam-gpt/Llama-3.1-70B-LatamGPT-SFT-1.0',
+        # 'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
+        # 'mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated',
     ]
 
     for model_name in models:
