@@ -3,6 +3,7 @@ import torch
 import os
 import json
 import re
+import argparse
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from pathlib import Path
@@ -10,7 +11,6 @@ from pathlib import Path
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent.parent
-INPUT_FILE = BASE_DIR / 'results/steering/intervention_raw.parquet'
 OUTPUT_FILE = BASE_DIR / 'data/escalas_politicas_por_tema.json'
 MODEL_CACHE = BASE_DIR / "model"
 
@@ -56,6 +56,12 @@ RESPONDE ÚNICAMENTE CON UN JSON EN EL SIGUIENTE FORMATO EXACTO:
 }}"""
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--folder", type=str, choices=["steering", "steering_100", "steering_200"], default="steering_200", help="Carpeta de resultados a leer")
+    args = parser.parse_args()
+
+    INPUT_FILE = BASE_DIR / f'results/{args.folder}/intervention_raw.parquet'
+
     if not INPUT_FILE.exists():
         print(f"Error: {INPUT_FILE} no existe. Por favor ajusta la ruta si es necesario.")
         return

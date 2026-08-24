@@ -9,6 +9,7 @@ import subprocess
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+import re
 from tqdm import tqdm
 from baukit import TraceDict
 from einops import rearrange
@@ -39,57 +40,115 @@ if not HUGGINGFACE_TOKEN:
 
 # Variable global para el hook
 current_alpha = 0
+current_method = "ridge"
 current_focal_ridge_dict = {}
 current_head_dict = {}
 current_features = None
 current_model_config = None
+current_num_heads = None
 accumulated_activations = {}
+precomputed_interventions = {}
+
+def get_attention_heads(model):
+    # Buscar dinámicamente el prefijo exacto de las capas usando named_modules
+    prefix = ""
+    for name, _ in model.named_modules():
+        # Buscar la primera capa de atención
+        match = re.search(r'^(.*)\.0\.self_attn\.o_proj$', name)
+        if match:
+            prefix = match.group(1)
+            break
+            
+    if not prefix:
+        # Intento de fallback para arquitecturas sin o_proj o con otra convención
+        for name, _ in model.named_modules():
+            match = re.search(r'^(.*)\.0\.attn\.c_proj$', name)
+            if match:
+                prefix = match.group(1)
+                break
+                
+    if not prefix:
+        for name, _ in model.named_modules():
+            match = re.search(r'^(.*)\.0\.linear_attn\.out_proj$', name)
+            if match:
+                prefix = match.group(1)
+                break
+                
+    if not prefix:
+        raise ValueError(f"No se pudo localizar el prefijo del bloque de atención para {type(model).__name__}")
+        
+    # Navegar por el modelo para obtener la lista de capas usando el prefijo encontrado
+    parts = prefix.split('.')
+    layers = model
+    for p in parts:
+        layers = getattr(layers, p)
+        
+    heads = []
+    for i, layer in enumerate(layers):
+        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
+            heads.append(f"{prefix}.{i}.self_attn.o_proj")
+        elif hasattr(layer, "attn") and hasattr(layer.attn, "c_proj"):
+            heads.append(f"{prefix}.{i}.attn.c_proj")
+        elif hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "out_proj"):
+            heads.append(f"{prefix}.{i}.linear_attn.out_proj")
+            
+    if not heads:
+        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__} bajo el prefijo {prefix}")
+        
+    return heads, prefix
 
 def lt_modulated_vector_add(head_output, layer_name):
-    global current_alpha, current_focal_ridge_dict, current_head_dict, current_features, current_model_config, accumulated_activations
+    global current_alpha, current_focal_ridge_dict, current_head_dict, current_features, current_num_heads, accumulated_activations, current_method
     
-    # Extract layer index from name (e.g., 'model.layers.15.self_attn.o_proj')
-    layer_index = int(layer_name.split('.')[2])
+    # Extraer el índice de la capa de manera robusta
+    match = re.search(r'\.(\d+)\.', layer_name) or re.search(r'^(\d+)\.', layer_name)
+    if not match:
+        raise ValueError(f"No se pudo extraer el índice de la capa de {layer_name}")
+    layer_index = int(match.group(1))
     
-    # head_output shape: [batch, seq, hidden_dim]
-    head_output = rearrange(head_output, 'b s (h d) -> b s h d', h=current_model_config.num_attention_heads)
-    
-    for head_index in current_head_dict[layer_index]:
-        # Intervention vector: alpha * (ridge_coef / norm(ridge_coef)) * std(projection)
-        # We target the last token's activation
-        ridge_coef = current_focal_ridge_dict[(layer_index, head_index)]
+    if current_method == "ridge":
+        # head_output shape: [batch, seq, hidden_dim] -> [batch, seq, heads, d_head]
+        head_output = rearrange(head_output, 'b s (h d) -> b s h d', h=current_num_heads)
         
-        # Calcular la desviación estándar de la proyección de las activaciones sobre la dirección de la sonda (ridge_coef)
-        # features shape: [num_statements, layers, heads, d_head]
-        acts = current_features[:, layer_index, head_index, :] # [num_statements, d_head]
-        proj = acts @ ridge_coef # [num_statements]
-        std_proj = np.std(proj)
-        
-        # Normalizar ridge_coef a norma 1 para no depender de la escala de los coeficientes originales
-        norm_ridge = np.linalg.norm(ridge_coef)
-        if norm_ridge > 0:
-            direction = ridge_coef / norm_ridge
-        else:
-            direction = ridge_coef
+        for head_index in current_head_dict.get(layer_index, []):
+            intervention_vec = precomputed_interventions[(layer_index, head_index)]
+            if intervention_vec.device != head_output.device:
+                intervention_vec = intervention_vec.to(head_output.device)
+                precomputed_interventions[(layer_index, head_index)] = intervention_vec
             
-        # El vector de intervención es escalado por alpha y la desviación estándar de la proyección
-        intervention_vec = torch.from_numpy(current_alpha * std_proj * direction).to(head_output.device).to(head_output.dtype)
-        
-        # Save activations before intervention
-        act = head_output[:, :, head_index, :].detach().cpu()
-        key = (layer_index, head_index)
-        if key not in accumulated_activations:
-            accumulated_activations[key] = []
-        accumulated_activations[key].append(act)
-        
-        # Add to the last token
-        head_output[:, -1, head_index, :] += intervention_vec
-        
-    head_output = rearrange(head_output, 'b s h d -> b s (h d)')
+            # Save activations before intervention
+            act = head_output[:, :, head_index, :].detach().cpu()
+            key = (layer_index, head_index)
+            if key not in accumulated_activations:
+                accumulated_activations[key] = []
+            accumulated_activations[key].append(act)
+            
+            # Add to the last token
+            head_output[:, -1, head_index, :] += intervention_vec
+            
+        head_output = rearrange(head_output, 'b s h d -> b s (h d)')
+    else:
+        # Para PCA, SAE y NMF operamos sobre el vector completo de tamaño hidden_dim
+        if layer_index in precomputed_interventions:
+            intervention_vec = precomputed_interventions[layer_index]
+            if intervention_vec.device != head_output.device:
+                intervention_vec = intervention_vec.to(head_output.device)
+                precomputed_interventions[layer_index] = intervention_vec
+                
+            # Save activations before intervention
+            act = head_output[:, :, :].detach().cpu()
+            key = layer_index
+            if key not in accumulated_activations:
+                accumulated_activations[key] = []
+            accumulated_activations[key].append(act)
+            
+            # Add to the last token (intervention_vec tiene tamaño hidden_dim)
+            head_output[:, -1, :] += intervention_vec
+            
     return head_output
 
 def main():
-    global current_alpha, current_focal_ridge_dict, current_head_dict, current_features, current_model_config
+    global current_alpha, current_focal_ridge_dict, current_head_dict, current_features, current_num_heads, precomputed_interventions
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", action="store_true")
@@ -97,13 +156,17 @@ def main():
     parser.add_argument("--worker-id", type=int, default=0)
     parser.add_argument("--topic", type=str, help="Filtrar un tema específico para evaluar")
     parser.add_argument("--model", type=str, help="Filtrar un modelo específico para evaluar")
+    parser.add_argument("--steering-method", type=str, choices=["ridge", "pca", "sae", "nmf"], default="ridge", help="Método de extracción del vector de steering")
     args = parser.parse_args()
+    
+    global current_method
+    current_method = args.steering_method
 
     models = [
-        'meta-llama/Meta-Llama-3-8B-Instruct', 
-        'mistralai/Mistral-7B-Instruct-v0.3', 
-        'Qwen/Qwen2.5-7B-Instruct',
-        'failspy/Meta-Llama-3-8B-Instruct-abliterated-v3'
+        'google/gemma-4-E4B-it',
+        'meta-llama/Llama-3.1-8B-Instruct',
+        'Qwen/Qwen3.5-9B',
+        # 'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
     ]
     
     if args.model:
@@ -143,8 +206,9 @@ def main():
             
             if all_results:
                 df_final = pd.DataFrame(all_results, columns=['model', 'k', 'alpha', 'topic', 'text'])
-                df_final.to_parquet(OUTPUT_DIR / 'intervention_raw.parquet')
-                print(f"Archivo consolidado exitosamente en {OUTPUT_DIR / 'intervention_raw.parquet'}")
+                out_pq = OUTPUT_DIR / f'intervention_{args.steering_method}.parquet'
+                df_final.to_parquet(out_pq)
+                print(f"Archivo consolidado exitosamente en {out_pq}")
             return
             
     # --- Lógica del Worker o Single GPU ---
@@ -166,9 +230,9 @@ def main():
             return
 
     for model_name in models:
-        print(f"\n--- Intervención en modelo: {model_name} ---")
+        print(f"\n--- Intervención en modelo: {model_name} (Método: {args.steering_method}) ---")
         safe_name = model_name.replace("/", "_")
-        output_results_path = OUTPUT_DIR / f"{safe_name}_intervention_results.pkl"
+        output_results_path = OUTPUT_DIR / f"{safe_name}_intervention_results_{args.steering_method}.pkl"
         
         # Omitir generación si ya existen los resultados
         if output_results_path.exists():
@@ -179,27 +243,57 @@ def main():
         
         perf_path = RESULTS_DIR / f"{safe_name}_politician_performance.pkl"
         feat_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
-        ridge_path = RESULTS_DIR / f"{safe_name}_ridge.pkl"
         
-        if not (perf_path.exists() and feat_path.exists() and ridge_path.exists()):
-            print(f"Error: Faltan archivos de resultados para {model_name}. Ejecuta los scripts anteriores primero.")
+        if not feat_path.exists():
+            print(f"Error: Faltan archivos de características para {model_name}.")
             continue
-
-        performance = pickle.load(open(perf_path, 'rb'))
+            
         with open(feat_path, 'rb') as f:
             current_features, _ = pickle.load(f)
-        trained_ridge_dict = pickle.load(open(ridge_path, 'rb'))
+            
+        if args.steering_method == "ridge":
+            ridge_path = RESULTS_DIR / f"{safe_name}_ridge.pkl"
+            if not (perf_path.exists() and ridge_path.exists()):
+                print(f"Error: Faltan archivos de resultados ridge para {model_name}. Ejecuta entrenar_probes.py")
+                continue
+            performance = pickle.load(open(perf_path, 'rb'))
+            trained_model_dict = pickle.load(open(ridge_path, 'rb'))
+        elif args.steering_method == "pca":
+            pca_path = BASE_DIR / f"results/pca_analysis/{safe_name}_pca_analysis.pkl"
+            if not pca_path.exists():
+                print(f"Error: Falta archivo PCA para {model_name}. Ejecuta analisis_pca_activaciones.py")
+                continue
+            trained_model_dict = pickle.load(open(pca_path, 'rb'))
+        elif args.steering_method in ["sae", "nmf"]:
+            # Marcador de posición para cuando se implemente SAE/NMF
+            method_path = BASE_DIR / f"results/{args.steering_method}_analysis/{safe_name}_{args.steering_method}_analysis.pkl"
+            if not method_path.exists():
+                print(f"Error: Falta archivo {args.steering_method} para {model_name}.")
+                continue
+            trained_model_dict = pickle.load(open(method_path, 'rb'))
 
         tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN, use_fast=False)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, 
             cache_dir=str(MODEL_CACHE), 
             low_cpu_mem_usage=True, 
-            dtype=torch.float16, 
+            torch_dtype=torch.float16, 
             token=HUGGINGFACE_TOKEN,
             device_map="auto"
         )
-        current_model_config = model.config
+        
+        input_device = getattr(model, "device", None) or next(model.parameters()).device
+        
+        # Obtener num_attention_heads de manera robusta
+        current_num_heads = getattr(model.config, "num_attention_heads", None)
+        if current_num_heads is None and hasattr(model.config, "text_config"):
+            current_num_heads = getattr(model.config.text_config, "num_attention_heads", None)
+        if current_num_heads is None:
+            current_num_heads = getattr(model.config, "n_head", None)
+        if current_num_heads is None:
+            raise ValueError(f"No se pudo determinar el número de cabezas (num_attention_heads) para {model_name}.")
+            
+        heads_list, model_prefix = get_attention_heads(model)
 
         results = []
         # Parámetros de intervención tal cual el notebook
@@ -207,25 +301,73 @@ def main():
         alpha_values = sorted([-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50])
 
         for k in k_values:
-            # Seleccionar las top-k cabezas según performance
-            top_indices = np.dstack(np.unravel_index(np.argsort(performance.ravel()), performance.shape))[0][-k:, :][::-1]
+            layers_to_trace = []
             
-            # Preparar diccionarios para el hook
-            current_focal_ridge_dict = {}
-            current_head_dict = {}
-            for i in top_indices:
-                l_idx, h_idx = i
-                current_focal_ridge_dict[(l_idx, h_idx)] = trained_ridge_dict[l_idx][h_idx].coef_
-                if l_idx not in current_head_dict:
-                    current_head_dict[l_idx] = [h_idx]
-                else:
-                    current_head_dict[l_idx].append(h_idx)
-            
-            # Capas a intervenir
-            layers_to_trace = [f'model.layers.{i}.self_attn.o_proj' for i in sorted(current_head_dict.keys())]
+            if args.steering_method == "ridge":
+                # Seleccionar las top-k cabezas según performance
+                top_indices = np.dstack(np.unravel_index(np.argsort(performance.ravel()), performance.shape))[0][-k:, :][::-1]
+                
+                current_focal_ridge_dict = {}
+                current_head_dict = {}
+                for i in top_indices:
+                    l_idx, h_idx = i
+                    current_focal_ridge_dict[(l_idx, h_idx)] = trained_model_dict[l_idx][h_idx].coef_
+                    if l_idx not in current_head_dict:
+                        current_head_dict[l_idx] = [h_idx]
+                    else:
+                        current_head_dict[l_idx].append(h_idx)
+                
+                layers_to_trace = [heads_list[i] for i in sorted(current_head_dict.keys())]
+            else:
+                # Para PCA, SAE, NMF
+                # Extraemos los top K componentes globales
+                top_components = trained_model_dict["all_components"][:k]
+                current_head_dict = {} # Guardaremos los vectores agrupados por capa
+                
+                for comp in top_components:
+                    l_idx = comp['layer']
+                    vec = comp['vector'] # [hidden_dim]
+                    if l_idx not in current_head_dict:
+                        current_head_dict[l_idx] = [vec]
+                    else:
+                        current_head_dict[l_idx].append(vec)
+                        
+                layers_to_trace = [heads_list[i] for i in sorted(current_head_dict.keys())]
 
             for alpha in tqdm(alpha_values, desc=f"k={k}"):
                 current_alpha = alpha
+                
+                precomputed_interventions.clear()
+                
+                if args.steering_method == "ridge":
+                    for l_idx, h_idx in current_focal_ridge_dict.keys():
+                        ridge_coef = current_focal_ridge_dict[(l_idx, h_idx)]
+                        acts = current_features[:, l_idx, h_idx, :]
+                        proj = acts @ ridge_coef
+                        std_proj = np.std(proj)
+                        norm_coef = np.linalg.norm(ridge_coef)
+                        direction = ridge_coef / (norm_coef if norm_coef > 0 else 1)
+                        
+                        vec = torch.from_numpy(current_alpha * std_proj * direction).to(model.dtype).to(input_device)
+                        precomputed_interventions[(l_idx, h_idx)] = vec
+                else:
+                    # Precomputar intervenciones globales por capa para PCA/SAE/NMF
+                    for l_idx, vecs in current_head_dict.items():
+                        layer_total_vec = np.zeros_like(vecs[0])
+                        # acts_flat shape: [num_statements, hidden_dim]
+                        num_stmts = current_features.shape[0]
+                        acts_flat = current_features[:, l_idx, :, :].reshape(num_stmts, -1)
+                        
+                        for vec in vecs:
+                            proj = acts_flat @ vec
+                            std_proj = np.std(proj)
+                            norm_coef = np.linalg.norm(vec)
+                            direction = vec / (norm_coef if norm_coef > 0 else 1)
+                            layer_total_vec += (current_alpha * std_proj * direction)
+                            
+                        t_vec = torch.from_numpy(layer_total_vec).to(model.dtype).to(input_device)
+                        precomputed_interventions[l_idx] = t_vec
+                
                 for topic in topics:
                     messages = [{"role": "user", "content": f"Escribe una declaración sobre {topic}."}]
                     prompt_formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -240,7 +382,7 @@ def main():
                     # Process and save activations
                     token_activations = {}
                     for key, act_list in accumulated_activations.items():
-                        full_act = torch.cat(act_list, dim=1).squeeze(0).numpy() # [total_seq_len, d_head]
+                        full_act = torch.cat(act_list, dim=1).squeeze(0).float().numpy() # [total_seq_len, d_head]
                         token_activations[key] = full_act
                     
                     token_ids = model_gen_tokens[0].cpu().numpy()
@@ -268,7 +410,7 @@ def main():
                         model_gen_str = "[ERROR_DECODING: El modelo generó tokens inválidos debido a intervención extrema]"
                     results.append([model_name, k, alpha, topic, model_gen_str.strip()])
 
-        output_results_path = OUTPUT_DIR / f"{safe_name}_intervention_results.pkl"
+        output_results_path = OUTPUT_DIR / f"{safe_name}_intervention_results_{args.steering_method}.pkl"
 
         with open(output_results_path, 'wb') as f:
             pickle.dump(results, f)
@@ -286,15 +428,16 @@ def main():
         all_results = []
         for model_name in models:
             safe_name = model_name.replace("/", "_")
-            results_path = OUTPUT_DIR / f"{safe_name}_intervention_results.pkl"
+            results_path = OUTPUT_DIR / f"{safe_name}_intervention_results_{args.steering_method}.pkl"
             if results_path.exists():
                 with open(results_path, 'rb') as f:
                     all_results += pickle.load(f)
         
         if all_results:
             df_final = pd.DataFrame(all_results, columns=['model', 'k', 'alpha', 'topic', 'text'])
-            df_final.to_parquet(OUTPUT_DIR / 'intervention_raw.parquet')
-            print(f"Archivo consolidado guardado en {OUTPUT_DIR / 'intervention_raw.parquet'}")
+            out_pq = OUTPUT_DIR / f'intervention_{args.steering_method}.parquet'
+            df_final.to_parquet(out_pq)
+            print(f"Archivo consolidado guardado en {out_pq}")
 
 if __name__ == "__main__":
     main()

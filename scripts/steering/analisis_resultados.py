@@ -38,6 +38,15 @@ def main():
     df = df.dropna(subset=['score_coherence', 'score_postura'])
     print(f"Limpieza: {len(df)} registros válidos de {initial_len} totales.")
 
+    # Filtrar solo modelos state-of-the-art
+    sota_models = [
+        'google/gemma-4-E4B-it', 
+        'meta-llama/Llama-3.1-8B-Instruct', 
+        'Qwen/Qwen3.5-9B'
+    ]
+    df = df[df['model'].isin(sota_models)]
+    print(f"Filtrando a {len(df)} registros para los modelos seleccionados (Gemma 4, Llama 3.1, Qwen 3.5).")
+
     df_slant = df[(df['alpha'] >= -30) & (df['alpha'] <= 30)]
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=df_slant, x='alpha', y='score_postura', hue='model', style='model', markers=True, dashes=False, errorbar='sd', err_style='bars', err_kws={'capsize': 3})
