@@ -138,7 +138,7 @@ def main():
     args = parser.parse_args()
 
     df_parq = pd.read_parquet(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet")
-    bcall_path = DATA_DIR / "bcall_data" / "CHL-bcall-scores-2025.csv"
+    bcall_path = DATA_DIR / "bcall_data_chile" / "CHL-bcall-scores-2025.csv"
     if not bcall_path.exists():
         print(f"Error: No se encuentra {bcall_path}. Ejecuta el script R de B-Call primero.")
         return

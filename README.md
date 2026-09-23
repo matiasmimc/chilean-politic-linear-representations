@@ -1,31 +1,26 @@
-# Chilean Politic Linear Representations
+# Representaciones Lineales de la Política Chilena
 
-This repository contains the code and data for analyzing and manipulating the political ideology of Large Language Models (LLMs) in the context of Chilean politics.
+Este repositorio contiene el código y los datos para analizar y manipular la ideología política de los Modelos de Lenguaje Grande (LLMs) en el contexto de la política chilena.
 
-## 📌 Overview
+## 📌 Descripción General
 
-Large Language Models (like Llama 3, Mistral, and Qwen) form complex internal representations of human concepts, including political ideologies. This project uses **Mechanistic Interpretability**—a field that looks "under the hood" of AI models—to discover how these models represent the Chilean political spectrum (from left to right).
+Los Modelos de Lenguaje Grande (como Llama 3, Gemma y Qwen) forman representaciones internas complejas de conceptos humanos, incluidas las ideologías políticas. Este proyecto utiliza la **Interpretabilidad Mecanicista** —un campo que mira dentro de los modelos de IA— para descubrir cómo estos representan el espectro político chileno.
 
-Instead of fine-tuning or retraining the models, we identify the internal "political direction" (a linear vector) within the model's artificial brain. By intervening on this vector during text generation, we can dynamically **steer** the model's responses to be more left-leaning or right-leaning on various local topics (e.g., immigration, abortion, climate change).
+En lugar de ajustar finamente (fine-tuning) o reentrenar los modelos, identificamos la "dirección política" interna (un vector lineal) dentro los parámetros del modelo. Al intervenir sobre este vector durante la generación de texto, podemos **guiar (steer)** dinámicamente las respuestas del modelo para que se inclinen más hacia alguna posición en varios temas locales (por ejemplo, inmigración, aborto, cambio climático).
 
-## 🔍 How It Works 
+## 🔍 Cómo Funciona
 
-Our methodology consists of four main steps:
+Nuestra metodología consta de cuatro pasos principales:
 
-1. **Reading the AI's Mind (Extraction)**: We feed the model statements made by real Chilean politicians and extract its internal activations (how the artificial neurons fire).
-2. **Finding the Political Compass (Probing)**: We train simple classifiers to find the specific mathematical direction in the AI's internal space that corresponds to the left-right political spectrum.
-3. **Steering the Output (Intervention)**: When the model generates new text, we can "nudge" it along this political vector. This allows us to control the political posture of its answers on the fly.
-4. **Evaluation**: We use a separate judge model (like Gemma 3) to evaluate if the new statements genuinely reflect the intended political posture while keeping the text coherent and natural.
+1. **Leyendo la Mente de la IA (Extracción)**: Alimentamos al modelo con declaraciones hechas por políticos chilenos reales y extraemos sus activaciones internas (cómo se activan las neuronas artificiales).
+2. **Encontrando la Brújula Política**: Entrenamos modelos de extracción de características para encontrar la dirección matemática específica en el espacio interno del LLM que corresponde al espectro político chileno.
+3. **Guiando la Salida (Intervención)**: Cuando el modelo genera texto nuevo, podemos "empujarlo" a lo largo de este vector político. Esto nos permite controlar la postura política de sus respuestas sobre la marcha.
+4. **Evaluación**: Utilizamos la predicción de votos reales de diputados para evaluar si la intervención logra alterar genuinamente el comportamiento político del modelo, simulando cómo votaría bajo diferentes posiciones políticas.
 
-## 📂 Repository Structure
+## 📂 Estructura del Repositorio
 
-- `data/`: Datasets containing statements, biographies, and ideological scales of Chilean politicians.
-- `scripts/`: The core pipeline for extracting activations, training probes, intervening (steering) the models, and evaluating the results.
-- `notebooks/`: Jupyter notebooks for data exploration, results replication, and generating visualizations.
-- `results/`: The consolidated outputs of our experiments, including steering data and evaluated statements.
-- `figures/`: Visualizations of our findings.
-- `log.md`: A technical, living document tracking the detailed project workflow, experiment history, and roadmap for developers and collaborators.
-
-## 🚀 Getting Started
-
-If you are a collaborator or want to run the pipeline, please refer to the **Interactive Pipeline Guide** inside [`log.md`](log.md) for step-by-step instructions on how the scripts connect with each other. 
+- `data/`: Conjuntos de datos que contienen declaraciones, biografías y escalas ideológicas de políticos chilenos.
+- `scripts/`: La canalización (pipeline) principal para extraer activaciones, entrenar clasificadores (probes), intervenir (guiar) los modelos y evaluar los resultados.
+- `notebooks/`: Cuadernos (notebooks) de Jupyter para la exploración de datos, replicación de resultados y generación de visualizaciones.
+- `results/`: Las salidas consolidadas de nuestros experimentos, incluidos los datos de intervención (steering) y las declaraciones evaluadas.
+- `figures/`: Visualizaciones de nuestros hallazgos.

@@ -65,7 +65,16 @@ def get_attention_heads(model):
 
 def extract_attention_head_activations(model, statements):
     HEADS = get_attention_heads(model)
-    head_wise_hidden_states_list = []
+    
+    num_heads = getattr(model.config, "num_attention_heads", None)
+    if num_heads is None and hasattr(model.config, "text_config"):
+        num_heads = getattr(model.config.text_config, "num_attention_heads", None)
+    if num_heads is None:
+        num_heads = getattr(model.config, "n_head", None)
+    if num_heads is None:
+        raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
+        
+    features = []
     
     # En multi-GPU / device_map="auto", enviamos el input al dispositivo de la primera capa / embeddings
     try:
@@ -80,24 +89,15 @@ def extract_attention_head_activations(model, statements):
                 _ = model(prompt.to(input_device))
                 # output from o_proj is [batch, seq, hidden_dim]
                 head_wise_hidden_states = [ret[head].output.squeeze().detach().float().cpu() for head in HEADS]
-                head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim=0).numpy() # [layers, seq, hidden]
-                head_wise_hidden_states_list.append(head_wise_hidden_states)
-    
-    features = []
-    num_heads = getattr(model.config, "num_attention_heads", None)
-    if num_heads is None and hasattr(model.config, "text_config"):
-        num_heads = getattr(model.config.text_config, "num_attention_heads", None)
-    if num_heads is None:
-        num_heads = getattr(model.config, "n_head", None)
-    if num_heads is None:
-        raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
-        
-    for head_wise_hidden_states in head_wise_hidden_states_list:
-        # We take the state of the last token in the sequence
-        last_token_states = head_wise_hidden_states[:, -1, :] # [layers, hidden]
-        # Reshape to [layers, heads, d_head]
-        reshaped = rearrange(last_token_states, 'l (h d) -> l h d', h=num_heads)
-        features.append(reshaped)
+                head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim=0) # [layers, seq, hidden]
+                
+                # Extraemos y guardamos SOLO el último token para no explotar la memoria RAM
+                last_token_states = head_wise_hidden_states[:, -1, :] # [layers, hidden]
+                
+                # CRÍTICO: Usar .copy() para que el array de numpy no comparta memoria con el tensor original 
+                # y permita que el recolector de basura elimine head_wise_hidden_states de la RAM.
+                reshaped = rearrange(last_token_states.numpy().copy(), 'l (h d) -> l h d', h=num_heads)
+                features.append(reshaped)
         
     features = np.stack(features, axis=0) # [num_statements, layers, heads, d_head]
     return features

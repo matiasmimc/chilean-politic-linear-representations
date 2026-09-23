@@ -5,3 +5,6 @@ __pycache__/
 .venv
 results/
 *.tar.gz
+.agents/
+log.md
+references/

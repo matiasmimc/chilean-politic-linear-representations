@@ -25,14 +25,14 @@ if (!requireNamespace("bcall", quietly = TRUE)) {
 library(bcall)
 
 # Crear directorio data si no existe
-dir.create("data/bcall_data", showWarnings = FALSE, recursive = TRUE)
+dir.create("data/bcall_data_chile", showWarnings = FALSE, recursive = TRUE)
 
 # URLs de los datos
 rollcall_url <- "https://alcatruz.github.io/bcall-example/data/CHL-rollcall-2025.csv"
 clustering_url <- "https://alcatruz.github.io/bcall-example/data/CHL-clustering-2025-CORREGIDO.csv"
 
-rollcall_path <- "data/bcall_data/CHL-rollcall-2025.csv"
-clustering_path <- "data/bcall_data/CHL-clustering-2025-CORREGIDO.csv"
+rollcall_path <- "data/bcall_data_chile/CHL-rollcall-2025.csv"
+clustering_path <- "data/bcall_data_chile/CHL-clustering-2025-CORREGIDO.csv"
 
 # Descargar archivos
 cat("Descargando dataset de votaciones (rollcall)...\n")
@@ -61,6 +61,6 @@ resultado_bcall <- bcall(
 )
 
 # Guardar resultados
-output_path <- "data/bcall_data/CHL-bcall-scores-2025.csv"
+output_path <- "data/bcall_data_chile/CHL-bcall-scores-2025.csv"
 write.csv(resultado_bcall$results, output_path, row.names = FALSE)
 cat("¡Éxito! Puntajes resultantes de B-Call calculados y guardados en:", output_path, "\n")
