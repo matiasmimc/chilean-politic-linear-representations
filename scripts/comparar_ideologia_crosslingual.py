@@ -186,5 +186,18 @@ def main():
     plt.savefig(fig_path, dpi=300)
     print(f"\n✅ Gráfico guardado en {fig_path}")
 
+    # Guardar métricas en JSON
+    import json
+    metrics_data = {
+        "model": model_name,
+        "cosine_similarity": similarities_cos,
+        "linear_cka": similarities_cka,
+        "pwcca": similarities_pwcca
+    }
+    json_path = FIGURES_DIR / f"{safe_name}_crosslingual_metrics.json"
+    with open(json_path, 'w') as f:
+        json.dump(metrics_data, f, indent=4)
+    print(f"✅ Métricas guardadas en {json_path}")
+
 if __name__ == "__main__":
     main()
