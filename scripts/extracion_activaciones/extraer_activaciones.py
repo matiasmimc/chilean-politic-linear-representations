@@ -30,9 +30,9 @@ if not HUGGINGFACE_TOKEN:
 DEFAULT_MODELS = [
     'google/gemma-4-E4B-it',
     'meta-llama/Llama-3.1-8B-Instruct',
-    'Qwen/Qwen3.5-9B',
-    # 'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
-    # 'mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated',
+    # 'Qwen/Qwen3.5-9B',
+    'zai-org/GLM-4-9B-0414',
+    # 'mistralai/Ministral-3-8B-Instruct-2512',
 ]
 
 def get_attention_heads(model):

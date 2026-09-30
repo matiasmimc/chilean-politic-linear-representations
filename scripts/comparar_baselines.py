@@ -87,9 +87,8 @@ def main():
     # 1. Gráfico de Barras: Comparación Max Spearman
     plot_data = []
     for _, row in df_summary.iterrows():
-        if pd.notna(row['names_only_max_spearman']):
+        if pd.notna(row['names_only_max_spearman']) and pd.notna(row['full_context_max_spearman']):
             plot_data.append({"Model": row['model'], "Type": "Names Only (Baseline)", "Spearman": row['names_only_max_spearman']})
-        if pd.notna(row['full_context_max_spearman']):
             plot_data.append({"Model": row['model'], "Type": "Full Context (20 Intervenciones)", "Spearman": row['full_context_max_spearman']})
 
     if plot_data:

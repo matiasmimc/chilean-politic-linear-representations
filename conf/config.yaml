@@ -1,0 +1,8 @@
+paths:
+  results_dir: "results/replication/v2_por_declaracion"
+  bcall_path: "data/bcall_data_chile/CHL-bcall-scores-2025.csv"
+  mp_path: "data/congreso_2022_2026_20intervenciones.parquet"
+
+params:
+  alpha: 2.0
+  compare_target: "nominate" # "nominate" or "bcall"

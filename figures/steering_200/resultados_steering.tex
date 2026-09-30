@@ -1,0 +1,9 @@
+\begin{tabular}{lcccccccc}
+\toprule
+method & Baseline (α=0) & Ridge & bcall_d1 & bcall_d2 & PCA & NMF & cPCA & cNMF \\
+model &  &  &  &  &  &  &  &  \\
+\midrule
+Llama-3.1-8B-Instruct & 64.1\% & 68.6\% \scriptsize{(α=50.0)} & 62.4\% \scriptsize{(α=10.0)} & 67.0\% \scriptsize{(α=50.0)} & 65.7\% \scriptsize{(α=0.0)} & 65.7\% \scriptsize{(α=0.0)} & 71.0\% \scriptsize{(α=5.0)} & 62.1\% \scriptsize{(α=0.0)} \\
+gemma-4-E4B-it & 76.0\% & 76.3\% \scriptsize{(α=50.0)} & 76.0\% \scriptsize{(α=0.0)} & 76.0\% \scriptsize{(α=0.0)} & 76.0\% \scriptsize{(α=0.0)} & 78.8\% \scriptsize{(α=10.0)} & 79.5\% \scriptsize{(α=30.0)} & 85.9\% \scriptsize{(α=10.0)} \\
+\bottomrule
+\end{tabular}
