@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
-DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2_por_declaracion"
-DEFAULT_CPCA_DIR = BASE_DIR / "results/cpca_analysis"
-DEFAULT_FIGURES_DIR = BASE_DIR / "figures/cpca_analysis"
+DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2"
+DEFAULT_CPCA_DIR = BASE_DIR / "results/cpca_analysis/varianza90"
+DEFAULT_FIGURES_DIR = BASE_DIR / "figures/cpca_analysis/varianza90"
 
 def cosine_similarity(u, v):
     norm_u = np.linalg.norm(u)
@@ -77,9 +77,15 @@ def main(cfg: DictConfig):
     cpca_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
     
-    sota_models = ['google_gemma-4-E4B-it', 'meta-llama_Llama-3.1-8B-Instruct', 'Qwen_Qwen3.5-9B']
+    sota_models = [
+        'google/gemma-4-E4B-it',
+        'meta-llama/Llama-3.1-8B-Instruct',
+        # 'Qwen/Qwen3.5-9B',
+        'zai-org/GLM-4-9B-0414',
+        # 'mistralai/Ministral-3-8B-Instruct-2512',        
+    ]
     
-    target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models)]
+    target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota.replace("/", "_") in f.name for sota in sota_models)]
     
     if not target_files:
         print(f"No se encontraron archivos *_politician_features.pkl en {results_dir}")
@@ -94,7 +100,7 @@ def main(cfg: DictConfig):
             continue
             
         print(f"\n{'='*60}")
-        print(f"Procesando Contrastive PCA (cPCA) | Modelo: {model_name} | Alpha: {cfg.params.alpha}")
+        print(f"Procesando Contrastive PCA (cPCA) | Modelo: {model_name} | Alpha: {cfg.params.contrast_alpha}")
         print(f"{'='*60}")
         
         with open(t_file, 'rb') as f:
@@ -161,7 +167,7 @@ def main(cfg: DictConfig):
             
             C_T = compute_covariance(X_T)
             C_B = compute_covariance(X_B)
-            C_contrastive = C_T - cfg.params.alpha * C_B
+            C_contrastive = C_T - cfg.params.contrast_alpha * C_B
             
             eigenvalues, eigenvectors = np.linalg.eigh(C_contrastive)
             
@@ -221,7 +227,7 @@ def main(cfg: DictConfig):
         out_dict = {
             "all_components": all_cpca_components,
             "top_90_components": top_90_components,
-            "alpha": cfg.params.alpha,
+            "alpha": cfg.params.contrast_alpha,
             "total_model_positive_variance": total_model_positive_variance,
             "pc1_nominate_alignment": pc1_nominate_alignment,
             "pc1_bcall_alignment": pc1_bcall_alignment,
@@ -246,7 +252,7 @@ def main(cfg: DictConfig):
             plt.plot(range(num_layers), pc2_bcall_alignment, marker='^', label='cPC2 vs b-call', color='#f39c12', linewidth=2)
             target_title = "b-call"
             
-        plt.title(f'Alineamiento Ideológico de cPC1 y cPC2 vs {target_title} por Capa\nModelo: {model_name} | Alpha: {cfg.params.alpha}', fontsize=12, fontweight='bold')
+        plt.title(f'Alineamiento Ideológico de cPC1 y cPC2 vs {target_title} por Capa\nModelo: {model_name} | Alpha: {cfg.params.contrast_alpha}', fontsize=12, fontweight='bold')
         plt.xlabel('Capa del Modelo')
         plt.ylabel('Similitud Coseno (|cos θ|)')
         plt.ylim(0, 1.0)

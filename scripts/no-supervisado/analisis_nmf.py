@@ -65,8 +65,15 @@ def main():
     nmf_dir = Path(args.nmf_dir)
     nmf_dir.mkdir(parents=True, exist_ok=True)
     
-    sota_models = ['google_gemma-4-E4B-it', 'meta-llama_Llama-3.1-8B-Instruct', 'Qwen_Qwen3.5-9B']
-    feature_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models)]
+    sota_models = [
+        'google/gemma-4-E4B-it',
+        'meta-llama/Llama-3.1-8B-Instruct',
+        # 'Qwen/Qwen3.5-9B',
+        'zai-org/GLM-4-9B-0414',
+        # 'mistralai/Ministral-3-8B-Instruct-2512',        
+    ]
+    sota_models_safe = [m.replace('/', '_') for m in sota_models]
+    feature_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models_safe)]
     
     if not feature_files:
         print(f"No se encontraron archivos SOTA en {results_dir}")

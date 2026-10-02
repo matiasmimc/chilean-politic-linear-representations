@@ -13,7 +13,7 @@ from einops import rearrange
 
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
-BASE_DIR = SCRIPT_DIR.parent
+BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
 DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2"
 MODEL_CACHE = BASE_DIR / "model"
@@ -30,52 +30,37 @@ if not HUGGINGFACE_TOKEN:
 DEFAULT_MODELS = [
     'google/gemma-4-E4B-it',
     'meta-llama/Llama-3.1-8B-Instruct',
-    'Qwen/Qwen3.5-9B'
+    # 'Qwen/Qwen3.5-9B',
+    'zai-org/GLM-4-9B-0414',
+    # 'mistralai/Ministral-3-8B-Instruct-2512',
 ]
 
 def get_attention_heads(model):
-    prefix = ""
-    for name, _ in model.named_modules():
-        match = re.search(r'^(.*)\.0\.self_attn\.o_proj$', name)
-        if match and "vision_tower" not in name:
-            prefix = match.group(1)
-            break
-            
-    if not prefix:
-        for name, _ in model.named_modules():
-            match = re.search(r'^(.*)\.0\.attn\.c_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    if not prefix:
-        for name, _ in model.named_modules():
-            match = re.search(r'^(.*)\.0\.linear_attn\.out_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    if not prefix:
-        raise ValueError(f"No se pudo localizar el prefijo del bloque de atención para {type(model).__name__}")
-        
-    parts = prefix.split('.')
-    layers = model
-    for p in parts:
-        layers = getattr(layers, p)
-        
+    import re
     heads = []
-    for i, layer in enumerate(layers):
-        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-            heads.append(f"{prefix}.{i}.self_attn.o_proj")
-        elif hasattr(layer, "attn") and hasattr(layer.attn, "c_proj"):
-            heads.append(f"{prefix}.{i}.attn.c_proj")
-        elif hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "out_proj"):
-            heads.append(f"{prefix}.{i}.linear_attn.out_proj")
+    # Buscar usando regex sobre todos los modulos nombrados, para evitar
+    # que wrappers de accelerate (offload a CPU/disco) oculten los atributos.
+    for name, _ in model.named_modules():
+        if "vision_tower" in name:
+            continue
+        if re.search(r'\.\d+\.self_attn\.o_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.attn\.c_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.linear_attn\.out_proj$', name):
+            heads.append(name)
             
-    if not heads:
-        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__} bajo el prefijo {prefix}")
+    # Ordenar por el número de capa para asegurar el orden correcto
+    def extract_layer_num(name):
+        match = re.search(r'\.(\d+)\.', name)
+        return int(match.group(1)) if match else 0
         
-    return heads, prefix
+    heads = sorted(heads, key=extract_layer_num)
+    
+    if not heads:
+        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__}")
+        
+    return heads, ""
 
 def build_neutral_prompts(df_neutral, df_mps, tokenizer):
     statements = []

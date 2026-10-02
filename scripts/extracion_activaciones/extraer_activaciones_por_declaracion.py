@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
-BASE_DIR = SCRIPT_DIR.parent
+BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
 DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2_por_declaracion"
 MODEL_CACHE = BASE_DIR / "model"

@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 
 # Configuración de Rutas
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent.parent
 BASE_DIR = SCRIPT_DIR.parent
 DATA_DIR = BASE_DIR / "data"
 RESULTS_DIR = BASE_DIR / "results/us_analysis"
@@ -20,45 +20,39 @@ MODEL_CACHE = BASE_DIR / "model"
 
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+from dotenv import load_dotenv
+load_dotenv(BASE_DIR / ".env")
 HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN", "")
+if not HUGGINGFACE_TOKEN:
+    print("Warning: HUGGINGFACE_TOKEN no encontrado en el archivo .env")
+
+sota_models = ['google/gemma-4-E4B-it', 'meta-llama/Llama-3.1-8B-Instruct', 'zai-org/GLM-4-9B-0414']
 
 def get_attention_heads(model):
-    prefix = ""
-    for name, _ in model.named_modules():
-        import re
-        match = re.search(r'^(.*)\.0\.self_attn\.o_proj$', name)
-        if match:
-            prefix = match.group(1)
-            break
-            
-    if not prefix:
-        for name, _ in model.named_modules():
-            import re
-            match = re.search(r'^(.*)\.0\.attn\.c_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    if not prefix:
-        for name, _ in model.named_modules():
-            import re
-            match = re.search(r'^(.*)\.0\.linear_attn\.out_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    parts = prefix.split('.')
-    layers = model
-    for p in parts:
-        layers = getattr(layers, p)
-        
+    import re
     heads = []
-    for i, layer in enumerate(layers):
-        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-            heads.append(f"{prefix}.{i}.self_attn.o_proj")
-        elif hasattr(layer, "attn") and hasattr(layer.attn, "c_proj"):
-            heads.append(f"{prefix}.{i}.attn.c_proj")
+    # Buscar usando regex sobre todos los modulos nombrados, para evitar
+    # que wrappers de accelerate (offload a CPU/disco) oculten los atributos.
+    for name, _ in model.named_modules():
+        if "vision_tower" in name:
+            continue
+        if re.search(r'\.\d+\.self_attn\.o_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.attn\.c_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.linear_attn\.out_proj$', name):
+            heads.append(name)
             
+    # Ordenar por el número de capa para asegurar el orden correcto
+    def extract_layer_num(name):
+        match = re.search(r'\.(\d+)\.', name)
+        return int(match.group(1)) if match else 0
+        
+    heads = sorted(heads, key=extract_layer_num)
+    
+    if not heads:
+        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__}")
+        
     return heads
 
 def extract_attention_head_activations(model, statements):
@@ -77,6 +71,11 @@ def extract_attention_head_activations(model, statements):
     
     features = []
     num_heads = getattr(model.config, "num_attention_heads", getattr(model.config, "n_head", None))
+    if num_heads is None and hasattr(model.config, "text_config"):
+        num_heads = getattr(model.config.text_config, "num_attention_heads", getattr(model.config.text_config, "n_head", None))
+    
+    if num_heads is None:
+        raise ValueError("No se pudo determinar 'num_heads' desde la configuración del modelo.")
         
     for head_wise_hidden_states in head_wise_hidden_states_list:
         last_token_states = head_wise_hidden_states[:, -1, :] 
@@ -132,40 +131,47 @@ def main():
     
     df.to_parquet(RESULTS_DIR / "us_politicians.parquet")
 
-    model_name = args.model
-    print(f"\n--- Procesando modelo: {model_name} (US Politicians) ---")
-    safe_name = model_name.replace("/", "_")
-    
-    output_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+    for model_name in sota_models:
+        print(f"\n--- Procesando modelo: {model_name} (US Politicians) ---")
+        safe_name = model_name.replace("/", "_")
         
-    tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name, 
-        cache_dir=str(MODEL_CACHE), 
-        low_cpu_mem_usage=True, 
-        torch_dtype=torch.float16, 
-        token=HUGGINGFACE_TOKEN,
-        device_map="auto"
-    )
-
-    print("Preparando prompts en inglés...")
-    statements = []
-    for _, row in df.iterrows():
-        name = row['Name']
-        # El paper original demuestra que los nombres bastan si el prompt es en cero-shot
-        messages = [{"role": "user", "content": f"Generate a political statement by {name}, a US politician."}]
-        prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        prompt_text += f"In 2025, {name} said that"
-
-        statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
+        output_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+            
+        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, 
+            cache_dir=str(MODEL_CACHE), 
+            low_cpu_mem_usage=True, 
+            torch_dtype=torch.float16, 
+            token=HUGGINGFACE_TOKEN,
+            device_map="auto"
+        )
     
-    labels = np.array(df['Ideology'].astype(float))
-    features = extract_attention_head_activations(model, statements)
+        print("Preparando prompts en inglés...")
+        statements = []
+        for _, row in df.iterrows():
+            name = row['Name']
+            # El paper original demuestra que los nombres bastan si el prompt es en cero-shot
+            messages = [{"role": "user", "content": f"Generate a political statement by {name}, a US politician."}]
+            prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            prompt_text += f"In 2025, {name} said that"
     
-    with open(output_path, 'wb') as f:
-        pickle.dump((features, labels), f)
-    
-    print(f"Activaciones de EEUU guardadas exitosamente en {output_path}")
+            statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
+        
+        labels = np.array(df['Ideology'].astype(float))
+        features = extract_attention_head_activations(model, statements)
+        
+        with open(output_path, 'wb') as f:
+            pickle.dump((features, labels), f)
+        
+        print(f"Activaciones de EEUU guardadas exitosamente en {output_path}")
+        
+        # Limpiar memoria GPU
+        del model
+        del tokenizer
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
 
 if __name__ == "__main__":
     main()
