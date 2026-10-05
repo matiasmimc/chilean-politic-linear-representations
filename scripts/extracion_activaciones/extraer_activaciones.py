@@ -36,46 +36,29 @@ DEFAULT_MODELS = [
 ]
 
 def get_attention_heads(model):
-    prefix = ""
-    for name, _ in model.named_modules():
-        match = re.search(r'^(.*)\.0\.self_attn\.o_proj$', name)
-        if match:
-            prefix = match.group(1)
-            break
-            
-    if not prefix:
-        for name, _ in model.named_modules():
-            match = re.search(r'^(.*)\.0\.attn\.c_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    if not prefix:
-        for name, _ in model.named_modules():
-            match = re.search(r'^(.*)\.0\.linear_attn\.out_proj$', name)
-            if match:
-                prefix = match.group(1)
-                break
-                
-    if not prefix:
-        raise ValueError(f"No se pudo localizar el prefijo del bloque de atención para {type(model).__name__}")
-        
-    parts = prefix.split('.')
-    layers = model
-    for p in parts:
-        layers = getattr(layers, p)
-        
+    import re
     heads = []
-    for i, layer in enumerate(layers):
-        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-            heads.append(f"{prefix}.{i}.self_attn.o_proj")
-        elif hasattr(layer, "attn") and hasattr(layer.attn, "c_proj"):
-            heads.append(f"{prefix}.{i}.attn.c_proj")
-        elif hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "out_proj"):
-            heads.append(f"{prefix}.{i}.linear_attn.out_proj")
+    # Buscar usando regex sobre todos los modulos nombrados, para evitar
+    # que wrappers de accelerate (offload a CPU/disco) oculten los atributos.
+    for name, _ in model.named_modules():
+        if "vision_tower" in name:
+            continue
+        if re.search(r'\.\d+\.self_attn\.o_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.attn\.c_proj$', name):
+            heads.append(name)
+        elif re.search(r'\.\d+\.linear_attn\.out_proj$', name):
+            heads.append(name)
             
+    # Ordenar por el número de capa para asegurar el orden correcto
+    def extract_layer_num(name):
+        match = re.search(r'\.(\d+)\.', name)
+        return int(match.group(1)) if match else 0
+        
+    heads = sorted(heads, key=extract_layer_num)
+    
     if not heads:
-        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__} bajo el prefijo {prefix}")
+        raise ValueError(f"No se encontraron proyecciones de atención en {type(model).__name__}")
         
     return heads
 
