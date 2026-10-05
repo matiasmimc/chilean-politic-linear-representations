@@ -34,7 +34,7 @@ if (Path.home() / "Documentos/GitHub/diputados_chatbot").exists():
 else:
     CHATBOT_DIR = Path.home() / "diputados_chatbot" # Asumiendo ruta en servidor
 
-DB_PATH = CHATBOT_DIR / 'data' / 'database' / 'parlamento.db'
+DB_PATH = DATA_DIR / 'parlamento.db'
 
 sys.path.append(str(CHATBOT_DIR))
 try:
