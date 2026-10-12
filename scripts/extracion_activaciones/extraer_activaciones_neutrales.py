@@ -97,9 +97,13 @@ def main():
     parser.add_argument("--neutral-path", type=str, default=str(DATA_DIR / "intervenciones_neutrales.parquet"))
     parser.add_argument("--mp-path", type=str, default=str(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"))
     parser.add_argument("--dtype", type=str, default="bfloat16")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"])
+    parser.add_argument("--force", action="store_true", help="Sobrescribir si el archivo ya existe.")
     args = parser.parse_args()
 
     results_dir = DEFAULT_RESULTS_DIR
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
     results_dir.mkdir(parents=True, exist_ok=True)
 
     df_neutral_path = Path(args.neutral_path)
@@ -139,56 +143,59 @@ def main():
         print("Preparando prompts neutrales...")
         statements, labels = build_neutral_prompts(df_neutral, df_mps, tokenizer)
         
-        heads_list, _ = get_attention_heads(model)
-        num_layers = len(heads_list)
-        
-        num_heads = getattr(model.config, "num_attention_heads", None)
-        if num_heads is None and hasattr(model.config, "text_config"):
-            num_heads = getattr(model.config.text_config, "num_attention_heads", None)
-        if num_heads is None:
-            num_heads = getattr(model.config, "n_head", None)
-        if num_heads is None:
-            raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
-        
-        head_dim = getattr(model.config, "head_dim", None)
-        if head_dim is not None:
-            d_head = head_dim
-        else:
-            hidden_size = getattr(model.config, "hidden_size", getattr(model.config, "n_embd", getattr(model.config, "d_model", 2048)))
-            d_head = hidden_size // num_heads
-
         all_features = []
         model.eval()
 
-        with torch.no_grad():
-            for input_ids in tqdm(statements, desc="Extrayendo activaciones neutrales"):
-                input_ids = input_ids.to(model.device)
-                
-                layer_features = []
-                def hook_fn(output, layer_name):
-                    if isinstance(output, tuple):
-                        act = output[0]
-                    else:
-                        act = output
-                    # Obtener la activación del ÚLTIMO token
-                    last_token_act = act[0, -1, :].detach().float().cpu().numpy()
-                    last_token_act = rearrange(last_token_act, '(h d) -> h d', h=num_heads)
-                    layer_features.append(last_token_act)
-                    return output
+        if args.target == "residual":
+            with torch.no_grad():
+                for input_ids in tqdm(statements, desc="Extrayendo residual stream (neutral)"):
+                    input_ids = input_ids.to(model.device)
+                    outputs = model(input_ids, output_hidden_states=True)
+                    hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                    last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
+                    all_features.append(last_token_states)
+            all_features = np.stack(all_features) # [num_statements, layers, d_model]
+        else:
+            heads_list, _ = get_attention_heads(model)
+            num_layers = len(heads_list)
+            
+            num_heads = getattr(model.config, "num_attention_heads", None)
+            if num_heads is None and hasattr(model.config, "text_config"):
+                num_heads = getattr(model.config.text_config, "num_attention_heads", None)
+            if num_heads is None:
+                num_heads = getattr(model.config, "n_head", None)
+            if num_heads is None:
+                raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
 
-                hooks = {layer: hook_fn for layer in heads_list}
-                
-                try:
-                    from baukit import TraceDict
-                    with TraceDict(model, layers=heads_list, edit_output=hook_fn):
-                        model(input_ids)
-                except Exception as e:
-                    print(f"Error en baukit, omitiendo: {e}")
-                    raise e
+            with torch.no_grad():
+                for input_ids in tqdm(statements, desc="Extrayendo activaciones neutrales"):
+                    input_ids = input_ids.to(model.device)
                     
-                all_features.append(np.stack(layer_features))
+                    layer_features = []
+                    def hook_fn(output, layer_name):
+                        if isinstance(output, tuple):
+                            act = output[0]
+                        else:
+                            act = output
+                        # Obtener la activación del ÚLTIMO token
+                        last_token_act = act[0, -1, :].detach().float().cpu().numpy()
+                        last_token_act = rearrange(last_token_act, '(h d) -> h d', h=num_heads)
+                        layer_features.append(last_token_act)
+                        return output
 
-        all_features = np.stack(all_features) # [num_statements, num_layers, num_heads, d_head]
+                    hooks = {layer: hook_fn for layer in heads_list}
+                    
+                    try:
+                        from baukit import TraceDict
+                        with TraceDict(model, layers=heads_list, edit_output=hook_fn):
+                            model(input_ids)
+                    except Exception as e:
+                        print(f"Error en baukit, omitiendo: {e}")
+                        raise e
+                        
+                    all_features.append(np.stack(layer_features))
+
+            all_features = np.stack(all_features) # [num_statements, num_layers, num_heads, d_head]
         
         with open(output_path, 'wb') as f:
             pickle.dump((all_features, labels), f)

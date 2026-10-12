@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 
 # Configuración de Rutas
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent.parent
 BASE_DIR = SCRIPT_DIR.parent
 DATA_DIR = BASE_DIR / "data"
 RESULTS_DIR = BASE_DIR / "results/replication/v2_names_only"
@@ -63,7 +63,18 @@ def get_attention_heads(model):
     return heads
 
 
-def extract_attention_head_activations(model, statements):
+def extract_activations(model, statements, target="attention"):
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extracting residual stream", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(model.device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states)
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
     HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
@@ -105,9 +116,12 @@ def main():
     parser.add_argument("--data-path", type=str, default=str(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"), help="Ruta al archivo de datos.")
     parser.add_argument("--output-dir", type=str, default=str(RESULTS_DIR), help="Directorio de salida para los resultados.")
     parser.add_argument("--cache-dir", type=str, default=str(MODEL_CACHE), help="Directorio del caché de los modelos descargados.")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
+    if args.target == "residual":
+        out_dir = out_dir / "residual"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df_path = Path(args.data_path)
@@ -124,8 +138,9 @@ def main():
     models = [
         'google/gemma-4-E4B-it',
         'meta-llama/Llama-3.1-8B-Instruct',
-        'Qwen/Qwen3.5-9B',
-        # 'huihui-ai/Huihui-Qwen3.5-9B-abliterated',
+        # 'Qwen/Qwen3.5-9B',
+        'zai-org/GLM-4-9B-0414',
+        # 'mistralai/Ministral-3-8B-Instruct-2512',
     ]
 
     if args.model:
@@ -171,7 +186,7 @@ def main():
 
         # Extraer activaciones
         labels = np.array(df['dim_ideology_P6'].astype(float))
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels), f)

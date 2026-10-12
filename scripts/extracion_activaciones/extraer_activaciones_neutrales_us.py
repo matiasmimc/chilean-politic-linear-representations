@@ -78,12 +78,34 @@ def build_neutral_prompts(df_neutral, df_mps, tokenizer):
     import numpy as np
     return statements, np.array(labels)
 
-def extract_attention_head_activations(model, inputs):
+def extract_activations(model, inputs, target="attention"):
+    if target == "residual":
+        features = []
+        for inp in tqdm(inputs, desc="Extrayendo residual stream"):
+            inp = inp.to(model.device)
+            with torch.no_grad():
+                outputs = model(inp, output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states)
+        # Transponer para emparejar la dimensionalidad [num_layers, num_statements, d_model]
+        features = np.stack(features) # [num_statements, layers, d_model]
+        # Wait, the current logic returns a list of arrays (num_layers), each shape [num_statements, ...]
+        # Let's match the old return shape convention for this script:
+        num_layers = features.shape[1]
+        final_features = []
+        for l in range(num_layers):
+            final_features.append(features[:, l, :])
+        return final_features
+
     heads_list, _ = get_attention_heads(model)
     
-    # Asegurar que el pad token esté definido
-    if model.config.pad_token_id is None:
-        model.config.pad_token_id = model.config.eos_token_id
+    # Asegurar que el pad token esté definido de forma segura (y manejar listas en eos_token_id)
+    if getattr(model.config, "pad_token_id", None) is None:
+        eos = getattr(model.config, "eos_token_id", None)
+        if isinstance(eos, list) and len(eos) > 0:
+            eos = eos[0]
+        model.config.pad_token_id = eos
 
     # Encontrar número de cabezales para el rearreglo (soporta LLMs y multimodales)
     num_heads = getattr(model.config, "num_attention_heads", getattr(model.config, "n_head", None))
@@ -105,11 +127,11 @@ def extract_attention_head_activations(model, inputs):
                 model(inp)
                 
         # Extraer las representaciones de cada cabeza en la última posición (last token)
-        head_wise_hidden_states_list = [ret[head].output[0] for head in heads_list]
+        head_wise_hidden_states_list = [ret[head].output[0].detach() for head in heads_list]
         features = []
         for head_wise_hidden_states in head_wise_hidden_states_list:
-            last_token_states = head_wise_hidden_states[:, -1, :] 
-            reshaped = rearrange(last_token_states, 'l (h d) -> l h d', h=num_heads)
+            last_token_states = head_wise_hidden_states[-1:, :] 
+            reshaped = rearrange(last_token_states, 'b (h d) -> b h d', h=num_heads)
             features.append(reshaped.cpu())
             
         activations.append(features)
@@ -127,9 +149,12 @@ def main():
     parser = argparse.ArgumentParser(description="Extracción de activaciones sobre texto neutral para US.")
     parser.add_argument("--neutral-path", type=str, default=str(DATA_DIR / "us_intervenciones_neutrales.parquet"))
     parser.add_argument("--mp-path", type=str, default=str(RESULTS_DIR / "us_politicians.parquet"))
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     args = parser.parse_args()
 
     results_dir = RESULTS_DIR
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
     results_dir.mkdir(parents=True, exist_ok=True)
 
     df_neutral_path = Path(args.neutral_path)
@@ -165,7 +190,7 @@ def main():
         statements, labels = build_neutral_prompts(df_neutral, df_mps, tokenizer)
         
         print("Extrayendo características...")
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             import pickle

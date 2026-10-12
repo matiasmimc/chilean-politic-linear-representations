@@ -55,7 +55,18 @@ def get_attention_heads(model):
         
     return heads
 
-def extract_attention_head_activations(model, statements):
+def extract_activations(model, statements, target="attention"):
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extracting residual stream", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(model.device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states)
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
     HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
@@ -103,7 +114,13 @@ def clean_bioname(bioname):
 def main():
     parser = argparse.ArgumentParser(description="Extracción de activaciones para Políticos de EEUU desde Nominate.")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     args = parser.parse_args()
+
+    results_dir = RESULTS_DIR
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     # Cargar CSV de Nominate
     csv_path = DATA_DIR / "EEUU-nominate.csv"
@@ -129,13 +146,13 @@ def main():
     df['Ideology'] = df['nominate_dim1'].astype(float)
     df['Party'] = df['party_code'].map({100: 'Democrat', 200: 'Republican'})
     
-    df.to_parquet(RESULTS_DIR / "us_politicians.parquet")
+    df.to_parquet(results_dir / "us_politicians.parquet")
 
     for model_name in sota_models:
         print(f"\n--- Procesando modelo: {model_name} (US Politicians) ---")
         safe_name = model_name.replace("/", "_")
         
-        output_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+        output_path = results_dir / f"{safe_name}_politician_features.pkl"
             
         tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN)
         model = AutoModelForCausalLM.from_pretrained(
@@ -159,7 +176,7 @@ def main():
             statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
         
         labels = np.array(df['Ideology'].astype(float))
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels), f)

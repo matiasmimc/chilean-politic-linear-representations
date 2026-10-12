@@ -78,7 +78,18 @@ def get_attention_heads(model):
     return heads
 
 
-def extract_attention_head_activations(model, statements, batch_size=1):
+def extract_activations(model, statements, target="attention", batch_size=1):
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extracting residual stream", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(model.device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states)
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
     HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
@@ -152,10 +163,13 @@ def main():
     parser.add_argument("--data-path", type=str, default=str(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"), help="Ruta al archivo parquet con parlamentarios e intervenciones.")
     parser.add_argument("--results-dir", type=str, default=str(DEFAULT_RESULTS_DIR), help="Directorio donde guardar los resultados extraídos.")
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["float16", "bfloat16", "float32"], help="Tipo de dato para cargar el modelo.")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     parser.add_argument("--force", action="store_true", help="Sobrescribir si el archivo ya existe.")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
     results_dir.mkdir(parents=True, exist_ok=True)
 
     df_path = Path(args.data_path)
@@ -206,7 +220,7 @@ def main():
             pickle.dump({"statements": statements, "labels": labels, "metadata": metadata}, f)
 
         labels_arr = np.array(labels)
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels_arr), f)

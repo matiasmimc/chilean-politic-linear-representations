@@ -116,7 +116,12 @@ def main(cfg: DictConfig):
         with open(us_b_path, 'rb') as f:
             us_B, _ = pickle.load(f)
 
-        
+        # Si alguna de las activaciones neutrales fue guardada como lista (por scripts anteriores), las apilamos a 4D
+        if isinstance(cl_T, list): cl_T = np.stack(cl_T, axis=1)
+        if isinstance(cl_B, list): cl_B = np.stack(cl_B, axis=1)
+        if isinstance(us_T, list): us_T = np.stack(us_T, axis=1)
+        if isinstance(us_B, list): us_B = np.stack(us_B, axis=1)
+
         # Obtener num de capas y dimensiones
         num_stmts_cl, num_layers_cl, num_heads, d_head = cl_T.shape
         num_layers_us = us_T.shape[1]

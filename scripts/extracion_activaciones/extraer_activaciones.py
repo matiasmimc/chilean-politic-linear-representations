@@ -63,7 +63,20 @@ def get_attention_heads(model):
     return heads
 
 
-def extract_attention_head_activations(model, statements):
+def extract_activations(model, statements, target="attention"):
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extracting residual stream", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(model.device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states)
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
+    # Attention logic
+
     HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
@@ -138,6 +151,7 @@ def main():
     parser.add_argument("--results-dir", type=str, default=None, help="Directorio donde guardar los resultados extraídos.")
     parser.add_argument("--names-only", action="store_true", help="Extraer solo usando nombres (sin declaraciones/intervenciones).")
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["float16", "bfloat16", "float32"], help="Tipo de dato para cargar el modelo.")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     parser.add_argument("--force", action="store_true", help="Sobrescribir si el archivo ya existe.")
     args = parser.parse_args()
 
@@ -148,6 +162,9 @@ def main():
         results_dir = BASE_DIR / "results/replication/v2_names_only"
     else:
         results_dir = DEFAULT_RESULTS_DIR
+
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,7 +218,8 @@ def main():
 
         # Extraer activaciones
         labels = np.array(df['dim_ideology_P6'].astype(float))
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations(model, statements, target=args.target)
+        print(f"Dimensión de las características extraídas: {features.shape}")
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels), f)
