@@ -26,7 +26,7 @@ def load_model_performance(perf_file):
 def format_model_label(filename):
     name = filename.replace("_politician_performance.pkl", "")
     # Simplificar nombres para gráficos
-    name = name.replace("meta-llama_", "").replace("google_", "").replace("Qwen_", "").replace("mistralai_", "")
+    name = name.replace("meta-llama_", "").replace("google_", "").replace("Qwen_", "").replace("mistralai_", "").replace("zai-org_", "")
     return name
 
 

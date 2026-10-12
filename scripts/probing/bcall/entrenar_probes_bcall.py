@@ -13,7 +13,8 @@ import difflib
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 BASE_DIR = SCRIPT_DIR.parent
 DATA_DIR = BASE_DIR / "data"
-DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2_names_only"
+DEFAULT_RESULTS_DIR_FULL = BASE_DIR / "results/replication/v2"
+DEFAULT_RESULTS_DIR_NAMES = BASE_DIR / "results/replication/v2_names_only"
 BCALL_RESULTS_DIR = BASE_DIR / "results/probing/bcall"
 BCALL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -131,11 +132,24 @@ def train_bcall_probes_for_file(features_path, df_parq, df_bcall, output_dir, fo
 
 def main():
     parser = argparse.ArgumentParser(description="Probing para las dos dimensiones de B-Call (d1 y d2)")
-    parser.add_argument("--features-dir", type=str, default=str(DEFAULT_RESULTS_DIR))
-    parser.add_argument("--output-dir", type=str, default=str(BCALL_RESULTS_DIR / "names_only"))
+    parser.add_argument("--mode", type=str, choices=["full", "names_only"], default="names_only", help="Modo de evaluación: 'full' usa activaciones completas, 'names_only' usa solo nombres.")
+    parser.add_argument("--features-dir", type=str, default=None, help="Directorio con archivos de activaciones. Por defecto se infiere de --mode.")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directorio de salida. Por defecto se infiere de --mode.")
     parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
+
+    if args.features_dir:
+        features_dir = Path(args.features_dir)
+    else:
+        features_dir = DEFAULT_RESULTS_DIR_FULL if args.mode == "full" else DEFAULT_RESULTS_DIR_NAMES
+
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = BCALL_RESULTS_DIR / "full" if args.mode == "full" else BCALL_RESULTS_DIR / "names_only"
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     df_parq = pd.read_parquet(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet")
     bcall_path = DATA_DIR / "bcall_data_chile" / "CHL-bcall-scores-2025.csv"
@@ -144,14 +158,13 @@ def main():
         return
     df_bcall = pd.read_csv(bcall_path)
 
-    feat_dir = Path(args.features_dir)
     if args.model:
-        feature_files = [f for f in feat_dir.glob("*_politician_features.pkl") if args.model.lower().replace("/", "_") in f.name.lower()]
+        feature_files = [f for f in features_dir.glob("*_politician_features.pkl") if args.model.lower().replace("/", "_") in f.name.lower()]
     else:
-        feature_files = sorted(list(feat_dir.glob("*_politician_features.pkl")))
+        feature_files = sorted(list(features_dir.glob("*_politician_features.pkl")))
 
     for feat_file in feature_files:
-        train_bcall_probes_for_file(feat_file, df_parq, df_bcall, args.output_dir, force=args.force)
+        train_bcall_probes_for_file(feat_file, df_parq, df_bcall, output_dir, force=args.force)
 
 if __name__ == "__main__":
     main()

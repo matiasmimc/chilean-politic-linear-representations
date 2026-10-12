@@ -14,7 +14,7 @@ def summarize_results():
         ("Nominate", "Solo Nombres", RESULTS_DIR / "replication" / "v2_names_only"),
         ("Nominate", "Intervenciones", RESULTS_DIR / "replication" / "v2"),
         ("B-Call", "Solo Nombres", RESULTS_DIR / "probing" / "bcall" / "names_only"),
-        ("B-Call", "Intervenciones", RESULTS_DIR / "probing" / "bcall" / "interventions")
+        ("B-Call", "Intervenciones", RESULTS_DIR / "probing" / "bcall" / "full")
     ]
     
     for metric, datatype, directory in configs:
