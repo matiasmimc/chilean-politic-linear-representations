@@ -15,7 +15,7 @@ import difflib
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
-DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2_por_declaracion"
+DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2"
 DEFAULT_PCA_DIR = BASE_DIR / "results/pca_analysis"
 DEFAULT_FIGURES_DIR = BASE_DIR / "figures/pca_analysis"
 

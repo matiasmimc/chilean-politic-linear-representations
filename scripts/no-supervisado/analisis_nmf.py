@@ -13,7 +13,7 @@ import difflib
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
-DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2_por_declaracion"
+DEFAULT_RESULTS_DIR = BASE_DIR / "results/replication/v2"
 DEFAULT_NMF_DIR = BASE_DIR / "results/nmf_analysis"
 DEFAULT_FIGURES_DIR = BASE_DIR / "figures/nmf_analysis"
 
@@ -125,7 +125,7 @@ def main():
             
             # --- MÉTODO: NMF PURO ---
             X_relu = np.maximum(X_layer, 0)
-            nmf_pure = NMF(n_components=args.nmf_components, init='random', random_state=42, max_iter=500)
+            nmf_pure = NMF(n_components=args.nmf_components, init='nndsvda', random_state=42, max_iter=100000)
             W_nmf_pure = nmf_pure.fit_transform(X_relu)
             decoded_components_pure = nmf_pure.components_
             

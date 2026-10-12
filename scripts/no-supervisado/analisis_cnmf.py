@@ -61,15 +61,20 @@ def main(cfg: DictConfig):
     bcall_path = BASE_DIR / cfg.paths.bcall_path
     mp_path = BASE_DIR / cfg.paths.mp_path
     
-    # Rutas de salida relativas a la carpeta generada por Hydra
-    cnmf_dir = Path("cnmf_results")
-    figures_dir = Path("figures")
+    # Rutas de salida absolutas en BASE_DIR
+    cnmf_dir = BASE_DIR / "results" / "cnmf_analysis"
+    figures_dir = BASE_DIR / "figures" / "cnmf_analysis"
     cnmf_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
     
-    sota_models = ['google_gemma-4-E4B-it', 'meta-llama_Llama-3.1-8B-Instruct']
-    #  'Qwen_Qwen3.5-9B']
-    target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models)]
+    sota_models = [
+        'google/gemma-4-E4B-it',
+        'meta-llama/Llama-3.1-8B-Instruct',
+        # 'Qwen/Qwen3.5-9B',
+        'zai-org/GLM-4-9B-0414',
+        # 'mistralai/Ministral-3-8B-Instruct-2512',
+    ]
+    target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota.replace("/", "_") in f.name for sota in sota_models)]
     
     for t_file in target_files:
         model_name = t_file.name.replace("_politician_features.pkl", "")
@@ -143,7 +148,7 @@ def main(cfg: DictConfig):
             ridge_bcall.fit(X_T, y_bcall)
             w_bcall = ridge_bcall.coef_
             
-            nmf = NMF(n_components=cfg.params.k, init='nndsvda', max_iter=100000, random_state=42)
+            nmf = NMF(n_components=cfg.params.get('k', 16), init='nndsvda', max_iter=100000, random_state=42)
             W_concat = nmf.fit_transform(X_concat)
             H = nmf.components_
             
@@ -155,7 +160,7 @@ def main(cfg: DictConfig):
             
             contrastive_scores = mean_act_T / (mean_act_B + 1e-6)
             
-            for i in range(cfg.params.k):
+            for i in range(cfg.params.get('k', 16)):
                 vec = H[i, :]
                 pvar_T = float(np.var(W_T[:, i]))
                 total_target_pseudo_variance += pvar_T
