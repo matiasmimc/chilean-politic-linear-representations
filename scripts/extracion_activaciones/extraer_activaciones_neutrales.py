@@ -62,9 +62,11 @@ def get_attention_heads(model):
         
     return heads, ""
 
-def build_neutral_prompts(df_neutral, df_mps, tokenizer):
+def build_neutral_prompts(df_neutral, df_mps, tokenizer, no_party=False):
     statements = []
     labels = []
+    if no_party:
+        random.seed(0)  # reproducible: el fondo neutral sin partido usa siempre los mismos nombres
     
     mps_list = df_mps.to_dict('records')
     
@@ -82,7 +84,8 @@ def build_neutral_prompts(df_neutral, df_mps, tokenizer):
         texto_neutral = row.get('intervenciones', "")
         prompt_intervenciones = f"\nA continuación, algunas intervenciones parlamentarias suyas:\n{texto_neutral}\n"
             
-        messages = [{"role": "user", "content": f"Genera una declaración de {name}, parlamentario/a en Chile del partido {party}.{prompt_intervenciones}"}]
+        party_txt = "" if no_party else f" del partido {party}"
+        messages = [{"role": "user", "content": f"Genera una declaración de {name}, parlamentario/a en Chile{party_txt}.{prompt_intervenciones}"}]
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompt_text += f"En 2025, {name} dijo que"
 
@@ -96,12 +99,14 @@ def main():
     parser.add_argument("--model", type=str, default=None, help="Nombre de modelo.")
     parser.add_argument("--neutral-path", type=str, default=str(DATA_DIR / "intervenciones_neutrales.parquet"))
     parser.add_argument("--mp-path", type=str, default=str(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"))
+    parser.add_argument("--8bit", action="store_true", help="Cargar el modelo cuantizado en 8-bits (BitsAndBytes).")
     parser.add_argument("--dtype", type=str, default="bfloat16")
     parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"])
+    parser.add_argument("--no-party", action="store_true", help="Omitir el partido en el prompt (fondo para cPCA sin partido).")
     parser.add_argument("--force", action="store_true", help="Sobrescribir si el archivo ya existe.")
     args = parser.parse_args()
 
-    results_dir = DEFAULT_RESULTS_DIR
+    results_dir = BASE_DIR / "results/replication/v3_noparty" if args.no_party else DEFAULT_RESULTS_DIR
     if args.target == "residual":
         results_dir = results_dir / "residual"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +123,15 @@ def main():
     models = [m.strip() for m in args.model.split(",")] if args.model else DEFAULT_MODELS
     torch_dtype = getattr(torch, args.dtype)
 
+    quantization_config = None
+    if getattr(args, "8bit", False):
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weight=False,
+        )
+
     for model_name in models:
         print(f"\n=======================================================")
         print(f"Extrayendo fondo (Background) para: {model_name}")
@@ -128,28 +142,37 @@ def main():
         
         try:
             tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN, use_fast=False)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name, 
-                cache_dir=str(MODEL_CACHE), 
-                low_cpu_mem_usage=True, 
-                torch_dtype=torch_dtype, 
-                token=HUGGINGFACE_TOKEN,
-                device_map="auto"
-            )
+            model_kwargs = {
+                "cache_dir": str(MODEL_CACHE),
+                "low_cpu_mem_usage": True,
+                "token": HUGGINGFACE_TOKEN,
+                "device_map": "auto",
+            }
+            if quantization_config is not None:
+                model_kwargs["quantization_config"] = quantization_config
+            else:
+                model_kwargs["torch_dtype"] = torch_dtype
+
+            model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
         except Exception as e:
             print(f"⚠️ Error cargando modelo {model_name}: {e}")
             continue
 
         print("Preparando prompts neutrales...")
-        statements, labels = build_neutral_prompts(df_neutral, df_mps, tokenizer)
+        statements, labels = build_neutral_prompts(df_neutral, df_mps, tokenizer, no_party=args.no_party)
         
         all_features = []
         model.eval()
 
+        try:
+            input_device = model.get_input_embeddings().weight.device
+        except Exception:
+            input_device = next(model.parameters()).device
+
         if args.target == "residual":
             with torch.no_grad():
                 for input_ids in tqdm(statements, desc="Extrayendo residual stream (neutral)"):
-                    input_ids = input_ids.to(model.device)
+                    input_ids = input_ids.to(input_device)
                     outputs = model(input_ids, output_hidden_states=True)
                     hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
                     last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
@@ -169,7 +192,7 @@ def main():
 
             with torch.no_grad():
                 for input_ids in tqdm(statements, desc="Extrayendo activaciones neutrales"):
-                    input_ids = input_ids.to(model.device)
+                    input_ids = input_ids.to(input_device)
                     
                     layer_features = []
                     def hook_fn(output, layer_name):

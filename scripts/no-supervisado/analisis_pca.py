@@ -123,9 +123,14 @@ def main():
             # Fallback a usar nominate
             labels_bcall = labels_nominate
             
-        num_statements, num_layers, num_heads, d_head = features.shape
-        hidden_dim = num_heads * d_head
-        features_flat = features.reshape(num_statements, num_layers, hidden_dim)
+        is_residual = features.ndim == 3
+        if is_residual:
+            num_statements, num_layers, hidden_dim = features.shape
+            features_flat = features
+        else:
+            num_statements, num_layers, num_heads, d_head = features.shape
+            hidden_dim = num_heads * d_head
+            features_flat = features.reshape(num_statements, num_layers, hidden_dim)
         
         all_components = []
         total_model_variance = 0.0
@@ -203,7 +208,12 @@ def main():
         for i, comp in enumerate(top_5):
             print(f"  {i+1}. Capa {comp['layer']}, PC{comp['pca_component_idx']+1} | Var Global Ratio: {comp['global_variance_ratio']:.4f} | CosSim(Nominate): {comp['nominate_cosine_sim']:.4f} | CosSim(b-call): {comp['bcall_cosine_sim']:.4f}")
             
-        output_file = pca_dir / f"{model_name}_pca_analysis_global.pkl"
+        curr_pca_dir = pca_dir / "residual" if is_residual else pca_dir
+        curr_figures_dir = figures_dir / "residual" if is_residual else figures_dir
+        curr_pca_dir.mkdir(parents=True, exist_ok=True)
+        curr_figures_dir.mkdir(parents=True, exist_ok=True)
+
+        output_file = curr_pca_dir / f"{model_name}_pca_analysis_global.pkl"
         with open(output_file, 'wb') as f:
             pickle.dump({
                 "all_components": all_components,
@@ -225,7 +235,7 @@ def main():
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(figures_dir / f"{model_name}_pca_alignment_nominate_vs_bcall.png", dpi=300)
+        plt.savefig(curr_figures_dir / f"{model_name}_pca_alignment_nominate_vs_bcall.png", dpi=300)
         plt.close()
 
     print("\n✅ Análisis PCA con varianza global y b-call completado con éxito.")

@@ -3,6 +3,7 @@ import os
 import gc
 import argparse
 import random
+import numpy as np
 from tqdm import tqdm
 from einops import rearrange
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -75,28 +76,25 @@ def build_neutral_prompts(df_neutral, df_mps, tokenizer):
         statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
         labels.append(float(ideology))
         
-    import numpy as np
     return statements, np.array(labels)
 
 def extract_activations(model, inputs, target="attention"):
+    try:
+        input_device = model.get_input_embeddings().weight.device
+    except Exception:
+        input_device = next(model.parameters()).device
+
     if target == "residual":
         features = []
         for inp in tqdm(inputs, desc="Extrayendo residual stream"):
-            inp = inp.to(model.device)
+            inp = inp.to(input_device)
             with torch.no_grad():
                 outputs = model(inp, output_hidden_states=True)
                 hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
                 last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
                 features.append(last_token_states)
-        # Transponer para emparejar la dimensionalidad [num_layers, num_statements, d_model]
         features = np.stack(features) # [num_statements, layers, d_model]
-        # Wait, the current logic returns a list of arrays (num_layers), each shape [num_statements, ...]
-        # Let's match the old return shape convention for this script:
-        num_layers = features.shape[1]
-        final_features = []
-        for l in range(num_layers):
-            final_features.append(features[:, l, :])
-        return final_features
+        return features
 
     heads_list, _ = get_attention_heads(model)
     
@@ -115,13 +113,12 @@ def extract_activations(model, inputs, target="attention"):
     if num_heads is None:
         raise ValueError("No se pudo determinar 'num_heads' desde la configuración del modelo.")
         
-    # Hook hook hook
     from baukit import TraceDict
     activations = []
     
     # Procesar batch por batch (de tamaño 1 para no tener problemas de padding)
     for inp in tqdm(inputs, desc="Extrayendo activaciones"):
-        inp = inp.to(model.device)
+        inp = inp.to(input_device)
         with torch.no_grad():
             with TraceDict(model, heads_list) as ret:
                 model(inp)
@@ -147,6 +144,9 @@ def extract_activations(model, inputs, target="attention"):
 
 def main():
     parser = argparse.ArgumentParser(description="Extracción de activaciones sobre texto neutral para US.")
+    parser.add_argument("--model", type=str, default=None, help="Nombre de modelo o lista separada por comas.")
+    parser.add_argument("--8bit", action="store_true", help="Cargar el modelo cuantizado en 8-bits (BitsAndBytes).")
+    parser.add_argument("--dtype", type=str, default="float16")
     parser.add_argument("--neutral-path", type=str, default=str(DATA_DIR / "us_intervenciones_neutrales.parquet"))
     parser.add_argument("--mp-path", type=str, default=str(RESULTS_DIR / "us_politicians.parquet"))
     parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
@@ -167,7 +167,19 @@ def main():
     df_mps = pd.read_parquet(args.mp_path)
     print(f"Cargado dataset neutral de EEUU de {len(df_neutral)} textos.")
     
-    for model_name in sota_models:
+    models = [m.strip() for m in args.model.split(",")] if args.model else sota_models
+    torch_dtype = getattr(torch, args.dtype)
+
+    quantization_config = None
+    if getattr(args, "8bit", False):
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weight=False,
+        )
+
+    for model_name in models:
         print(f"\n=======================================================")
         print(f"Extrayendo fondo neutral para EE.UU.: {model_name}")
         print(f"=======================================================")
@@ -176,15 +188,19 @@ def main():
         output_path = results_dir / f"{safe_name}_neutral_features.pkl"
         
         print(f"Cargando modelo y tokenizer {model_name}...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, 
-            cache_dir=str(MODEL_CACHE), 
-            low_cpu_mem_usage=True, 
-            torch_dtype=torch.float16, 
-            token=HUGGINGFACE_TOKEN,
-            device_map="auto"
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(MODEL_CACHE), token=HUGGINGFACE_TOKEN, use_fast=False)
+        model_kwargs = {
+            "cache_dir": str(MODEL_CACHE),
+            "low_cpu_mem_usage": True,
+            "token": HUGGINGFACE_TOKEN,
+            "device_map": "auto",
+        }
+        if quantization_config is not None:
+            model_kwargs["quantization_config"] = quantization_config
+        else:
+            model_kwargs["torch_dtype"] = torch_dtype
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
         
         print("Preparando prompts neutrales en inglés...")
         statements, labels = build_neutral_prompts(df_neutral, df_mps, tokenizer)

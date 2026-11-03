@@ -56,13 +56,18 @@ def get_attention_heads(model):
     return heads
 
 def extract_activations(model, statements, target="attention"):
+    try:
+        input_device = model.get_input_embeddings().weight.device
+    except Exception:
+        input_device = next(model.parameters()).device
+
     if target == "residual":
         features = []
         for prompt in tqdm(statements, desc="Extracting residual stream", total=len(statements)):
             with torch.no_grad():
-                outputs = model(prompt.to(model.device), output_hidden_states=True)
+                outputs = model(prompt.to(input_device), output_hidden_states=True)
                 hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
-                last_token_states = hidden_states[:, -1, :].cpu().float().numpy()
+                last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
                 features.append(last_token_states)
         features = np.stack(features, axis=0) # [num_statements, layers, d_model]
         return features
@@ -70,7 +75,7 @@ def extract_activations(model, statements, target="attention"):
     HEADS = get_attention_heads(model)
     head_wise_hidden_states_list = []
     
-    device = next(model.parameters()).device
+    device = input_device
     
     for prompt in tqdm(statements, desc="Extrayendo activaciones", total=len(statements)):
         with torch.no_grad():
@@ -113,7 +118,7 @@ def clean_bioname(bioname):
 
 def main():
     parser = argparse.ArgumentParser(description="Extracción de activaciones para Políticos de EEUU desde Nominate.")
-    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+    parser.add_argument("--model", type=str, default=None, help="Nombre de modelo de HuggingFace o lista separada por comas.")
     parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     args = parser.parse_args()
 
@@ -148,7 +153,9 @@ def main():
     
     df.to_parquet(results_dir / "us_politicians.parquet")
 
-    for model_name in sota_models:
+    models = [m.strip() for m in args.model.split(",")] if args.model else sota_models
+
+    for model_name in models:
         print(f"\n--- Procesando modelo: {model_name} (US Politicians) ---")
         safe_name = model_name.replace("/", "_")
         

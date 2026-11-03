@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
-BASE_DIR = SCRIPT_DIR.parent
+BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
 RESULTS_DIR = BASE_DIR / "results/replication/v2"
 MODEL_CACHE = BASE_DIR / "model"
@@ -63,7 +63,23 @@ def get_attention_heads(model):
     return heads
 
 
-def extract_attention_head_activations(model, statements):
+def extract_activations_70b(model, statements, target="attention"):
+    try:
+        input_device = model.get_input_embeddings().weight.device
+    except Exception:
+        input_device = next(model.parameters()).device
+
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extracting residual stream (70B 8-bit)", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(input_device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states.copy())
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
     HEADS = get_attention_heads(model)
     
     num_heads = getattr(model.config, "num_attention_heads", None)
@@ -75,12 +91,6 @@ def extract_attention_head_activations(model, statements):
         raise ValueError("No se pudo determinar el número de cabezas (num_attention_heads) del modelo.")
         
     features = []
-    
-    # En multi-GPU / device_map="auto", enviamos el input al dispositivo de la primera capa / embeddings
-    try:
-        input_device = model.get_input_embeddings().weight.device
-    except Exception:
-        input_device = next(model.parameters()).device
     
     for prompt in tqdm(statements, desc="Extracting activations (70B 8-bit)", total=len(statements)):
         # prompt is a tensor [1, seq_len]
@@ -108,10 +118,13 @@ def main():
     parser.add_argument("--model", type=str, default=None, help="Nombre o filtro del modelo a procesar (opcional).")
     parser.add_argument("--data-path", type=str, default=str(DATA_DIR / "congreso_2022_2026_20intervenciones.parquet"), help="Ruta al archivo de datos.")
     parser.add_argument("--output-dir", type=str, default=str(RESULTS_DIR), help="Directorio de salida para los resultados.")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     parser.add_argument("--cache-dir", type=str, default=str(MODEL_CACHE), help="Directorio del caché de los modelos descargados.")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
+    if args.target == "residual":
+        out_dir = out_dir / "residual"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df_path = Path(args.data_path)
@@ -199,7 +212,7 @@ def main():
 
         # Extraer activaciones
         labels = np.array(df['dim_ideology_P6'].astype(float))
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations_70b(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels), f)

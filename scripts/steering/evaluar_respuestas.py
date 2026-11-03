@@ -88,7 +88,8 @@ def main():
     parser.add_argument("--worker-id", type=int, default=0)
     parser.add_argument("--topic", type=str, help="Filtrar por un tema específico en el parquet")
     parser.add_argument("--model", type=str, help="Filtrar por un modelo específico en el parquet")
-    parser.add_argument("--folder", type=str, choices=["steering", "steering_100", "steering_200"], default="steering", help="Carpeta de resultados a evaluar")
+    parser.add_argument("--batch-size", type=int, default=8, help="Textos evaluados en paralelo por el juez")
+    parser.add_argument("--folder", type=str, default="steering", help="Carpeta de resultados a evaluar")
     args = parser.parse_args()
 
     global INPUT_FILE, OUTPUT_FILE
@@ -230,110 +231,69 @@ def main():
         processed_indices = []
 
     results = []
-    
+    BATCH = args.batch_size
+    tokenizer.padding_side = "left"
+
     # Iterar solo sobre los no procesados
     df_to_process = df.drop(processed_indices)
-    
-    desc_text = f"GPU {args.worker_id} Evaluando" if args.total_workers > 1 else "Evaluando"
-    for idx, row in tqdm(df_to_process.iterrows(), total=len(df_to_process), desc="Evaluando"):
-        text_safe = str(row['text'])
-        if len(text_safe) > 2000:
-            text_safe = text_safe[:2000] + "... [TRUNCADO POR EXCESO DE LONGITUD]"
-            
-        prompt_coherencia = get_judge_prompt_coherence(text_safe)
-        
-        # Formato Gemma 3 para chat coherencia
-        messages_coherencia = [
-            {"role": "system", "content": "Responde siempre en formato JSON."},
-            {"role": "user", "content": prompt_coherencia}
-        ]
-        inputs_coherencia = tokenizer.apply_chat_template(messages_coherencia, add_generation_prompt=True, return_tensors="pt", return_dict=True).to(model.device)
-        
+    rows_list = list(df_to_process.iterrows())
+
+    def judge_batch(prompts, max_new_tokens):
+        """Genera respuestas del juez para varios prompts a la vez (misma configuracion greedy que antes)."""
+        convs = [[{"role": "system", "content": "Responde siempre en formato JSON."},
+                  {"role": "user", "content": p}] for p in prompts]
+        enc = tokenizer.apply_chat_template(convs, add_generation_prompt=True, return_tensors="pt",
+                                            return_dict=True, padding=True).to(model.device)
         with torch.no_grad():
-            outputs_coherencia = model.generate(
-                **inputs_coherencia, 
-                max_new_tokens=100, 
-                do_sample=False,
-                eos_token_id=valid_eos if valid_eos else None,
-                pad_token_id=safe_pad_token_id
-            )
-        response_coherencia = tokenizer.decode(outputs_coherencia[0][inputs_coherencia['input_ids'].shape[-1]:], skip_special_tokens=True)
-        
-        # Intentar extraer JSON de la respuesta de coherencia
+            out = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
+                                 eos_token_id=valid_eos if valid_eos else None, pad_token_id=safe_pad_token_id)
+        return [tokenizer.decode(o[enc['input_ids'].shape[-1]:], skip_special_tokens=True) for o in out]
+
+    def parse_json(resp, key):
         try:
-            match_coherencia_md = re.search(r'```(?:json)?(.*?)```', response_coherencia, re.DOTALL)
-            if match_coherencia_md:
-                json_str_coh = match_coherencia_md.group(1).strip()
+            m_md = re.search(r'```(?:json)?(.*?)```', resp, re.DOTALL)
+            if m_md:
+                js = m_md.group(1).strip()
             else:
-                match_coherencia = re.search(r'\{.*\}', response_coherencia, re.DOTALL)
-                json_str_coh = match_coherencia.group(0) if match_coherencia else None
-                
-            if json_str_coh:
-                eval_data_coherencia = json.loads(json_str_coh)
-                score_coherencia = eval_data_coherencia.get('coherencia')
-                justificacion_coherencia = eval_data_coherencia.get('justificacion_breve', "")
-            else:
-                score_coherencia = None
-                justificacion_coherencia = f"Error: No se encontró JSON. Raw: {response_coherencia[:150]}..."
+                m = re.search(r'\{.*\}', resp, re.DOTALL)
+                js = m.group(0) if m else None
+            if js:
+                d = json.loads(js)
+                return d.get(key), d.get('justificacion_breve', "")
+            return None, f"Error: No se encontró JSON. Raw: {resp[:150]}..."
         except Exception as e:
-            score_coherencia = None
-            justificacion_coherencia = f"Error: {str(e)}. Raw: {response_coherencia[:150]}..."
-        # Evaluación de postura acotada a alpha [-30, 30]
-        if -30 <= row['alpha'] <= 30:
-            prompt_postura = get_judge_prompt_posture(row['topic'], text_safe)
-            messages_postura = [
-                {"role": "system", "content": "Responde siempre en formato JSON."},
-                {"role": "user", "content": prompt_postura}
-            ]
-            inputs_postura = tokenizer.apply_chat_template(messages_postura, add_generation_prompt=True, return_tensors="pt", return_dict=True).to(model.device)
-            
-            with torch.no_grad():
-                outputs_postura = model.generate(
-                    **inputs_postura, 
-                    max_new_tokens=300, 
-                    do_sample=False,
-                    eos_token_id=valid_eos if valid_eos else None,
-                    pad_token_id=safe_pad_token_id
-                )
-            response_postura = tokenizer.decode(outputs_postura[0][inputs_postura['input_ids'].shape[-1]:], skip_special_tokens=True)
-            
-            try:
-                match_postura_md = re.search(r'```(?:json)?(.*?)```', response_postura, re.DOTALL)
-                if match_postura_md:
-                    json_str_pos = match_postura_md.group(1).strip()
-                else:
-                    match_postura = re.search(r'\{.*\}', response_postura, re.DOTALL)
-                    json_str_pos = match_postura.group(0) if match_postura else None
-                    
-                if json_str_pos:
-                    eval_data_postura = json.loads(json_str_pos)
-                    score_postura = eval_data_postura.get('postura')
-                    justificacion_postura = eval_data_postura.get('justificacion_breve', "")
-                else:
-                    score_postura = None
-                    justificacion_postura = f"Error: No se encontró JSON. Raw: {response_postura[:150]}..."
-            except Exception as e:
-                score_postura = None
-                justificacion_postura = f"Error: {str(e)}. Raw: {response_postura[:150]}..."
-        else:
-            score_postura = None
-            justificacion_postura = "Omitido: Alpha fuera de rango [-30, 30]"
-            
-        justificacion = f"Coh: {justificacion_coherencia} | Pos: {justificacion_postura}"
-            
-        results.append({
-            **row.to_dict(),
-            "score_coherence": score_coherencia,
-            "score_postura": score_postura,
-            "justification": justificacion
-        })
-        
-        # Guardado periódico (cada 10 registros)
-        if len(results) % 10 == 0:
-            temp_df = pd.concat([df_evaluated, pd.DataFrame(results)], ignore_index=True)
-            temp_df.to_parquet(current_output_file)
-            results = [] # Limpiar buffer a memoria temporal guardada en df_evaluated
-            df_evaluated = temp_df
+            return None, f"Error: {str(e)}. Raw: {resp[:150]}..."
+
+    for start in tqdm(range(0, len(rows_list), BATCH), desc="Evaluando (batches)"):
+        chunk = rows_list[start:start + BATCH]
+        texts = []
+        for _, row in chunk:
+            t = str(row['text'])
+            if len(t) > 2000:
+                t = t[:2000] + "... [TRUNCADO POR EXCESO DE LONGITUD]"
+            texts.append(t)
+
+        resp_coh = judge_batch([get_judge_prompt_coherence(t) for t in texts], 100)
+
+        in_range = [i for i, (_, row) in enumerate(chunk) if -30 <= row['alpha'] <= 30]
+        resp_pos = {}
+        if in_range:
+            outs = judge_batch([get_judge_prompt_posture(chunk[i][1]['topic'], texts[i]) for i in in_range], 300)
+            resp_pos = dict(zip(in_range, outs))
+
+        for i, (idx, row) in enumerate(chunk):
+            score_coh, just_coh = parse_json(resp_coh[i], 'coherencia')
+            if i in resp_pos:
+                score_pos, just_pos = parse_json(resp_pos[i], 'postura')
+            else:
+                score_pos, just_pos = None, "Omitido: Alpha fuera de rango [-30, 30]"
+            results.append({**row.to_dict(), "score_coherence": score_coh, "score_postura": score_pos,
+                            "justification": f"Coh: {just_coh} | Pos: {just_pos}"})
+
+        temp_df = pd.concat([df_evaluated, pd.DataFrame(results)], ignore_index=True)
+        temp_df.to_parquet(current_output_file)
+        results = []
+        df_evaluated = temp_df
 
     # Guardado final
     if results:

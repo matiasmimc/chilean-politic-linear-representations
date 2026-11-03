@@ -24,3 +24,10 @@ Nuestra metodología consta de cuatro pasos principales:
 - `notebooks/`: Cuadernos (notebooks) de Jupyter para la exploración de datos, replicación de resultados y generación de visualizaciones.
 - `results/`: Las salidas consolidadas de nuestros experimentos, incluidos los datos de intervención (steering) y las declaraciones evaluadas.
 - `figures/`: Visualizaciones de nuestros hallazgos.
+- `data/derived/`: Tablas intermedias pequeñas (`intervention_*.parquet`, `steering_summary_stats*.csv`).
+- `docs/`: Informes y planes de experimentos.
+- `scripts/legacy/` y `scripts/scratch/`: Versiones antiguas y scripts exploratorios (no mantenidos).
+- `conf/`: Configuración (Hydra).
+
+No versionados (ver `.gitignore`): `model/` (pesos de modelos), `results/`, `results_replication/`, `outputs/`, `logs/`, `.venv/`.
+Las credenciales van en `.env` (plantilla en `.env.example`).

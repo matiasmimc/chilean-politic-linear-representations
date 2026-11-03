@@ -69,14 +69,34 @@ def main(cfg: DictConfig):
     print("="*60)
     print(OmegaConf.to_yaml(cfg))
 
-    CHILE_DIR = BASE_DIR / cfg.paths.results_dir
-    FIGURES_DIR = Path("figures")
+    target = cfg.get("target", "attention")
+    if target == "residual":
+        CHILE_DIR = (BASE_DIR / cfg.paths.results_dir) / "residual" if not str(cfg.paths.results_dir).endswith("residual") else (BASE_DIR / cfg.paths.results_dir)
+        US_DIR = (BASE_DIR / "results/us_analysis") / "residual"
+        FIGURES_DIR = BASE_DIR / "figures/crosslingual_analysis_cpca/residual"
+    else:
+        CHILE_DIR = BASE_DIR / cfg.paths.results_dir
+        US_DIR = BASE_DIR / "results/us_analysis"
+        FIGURES_DIR = BASE_DIR / "figures/crosslingual_analysis_cpca"
+        
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     
     contrast_alpha = cfg.params.contrast_alpha
     
-    sota_models = ['google_gemma-4-E4B-it', 'meta-llama_Llama-3.1-8B-Instruct', 'zai-org_GLM-4-9B-0414']
-    target_files = [f for f in CHILE_DIR.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models)]
+    sota_models = [
+        'google_gemma-4-E4B-it', 
+        'meta-llama_Llama-3.1-8B-Instruct', 
+        'zai-org_GLM-4-9B-0414',
+        'meta-llama_Llama-3.1-70B-Instruct',
+        'latam-gpt_Llama-3.1-70B-LatamGPT-SFT-1.0'
+    ]
+
+    selected_model = cfg.get("model", None)
+    if selected_model:
+        model_pattern = selected_model.replace("/", "_")
+        target_files = [f for f in CHILE_DIR.glob("*_politician_features.pkl") if model_pattern in f.name]
+    else:
+        target_files = [f for f in CHILE_DIR.glob("*_politician_features.pkl") if any(sota in f.name for sota in sota_models)]
     
     for t_file in target_files:
         model_name = t_file.name.replace("_politician_features.pkl", "")
@@ -116,24 +136,30 @@ def main(cfg: DictConfig):
         with open(us_b_path, 'rb') as f:
             us_B, _ = pickle.load(f)
 
-        # Si alguna de las activaciones neutrales fue guardada como lista (por scripts anteriores), las apilamos a 4D
+        # Si alguna de las activaciones neutrales fue guardada como lista (por scripts anteriores), las apilamos
         if isinstance(cl_T, list): cl_T = np.stack(cl_T, axis=1)
         if isinstance(cl_B, list): cl_B = np.stack(cl_B, axis=1)
         if isinstance(us_T, list): us_T = np.stack(us_T, axis=1)
         if isinstance(us_B, list): us_B = np.stack(us_B, axis=1)
 
-        # Obtener num de capas y dimensiones
-        num_stmts_cl, num_layers_cl, num_heads, d_head = cl_T.shape
-        num_layers_us = us_T.shape[1]
-        
-        num_layers = min(num_layers_cl, num_layers_us)
-        hidden_dim = num_heads * d_head
-        
-        cl_T_flat = cl_T[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
-        cl_B_flat = cl_B[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
-        
-        us_T_flat = us_T[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
-        us_B_flat = us_B[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
+        # Aplanar representaciones según si son 3D (residual) o 4D (attention heads)
+        if cl_T.ndim == 3:
+            num_stmts_cl, num_layers_cl, hidden_dim = cl_T.shape
+            num_layers_us = us_T.shape[1]
+            num_layers = min(num_layers_cl, num_layers_us)
+            cl_T_flat = cl_T[:, :num_layers, :]
+            cl_B_flat = cl_B[:, :num_layers, :]
+            us_T_flat = us_T[:, :num_layers, :]
+            us_B_flat = us_B[:, :num_layers, :]
+        else:
+            num_stmts_cl, num_layers_cl, num_heads, d_head = cl_T.shape
+            num_layers_us = us_T.shape[1]
+            num_layers = min(num_layers_cl, num_layers_us)
+            hidden_dim = num_heads * d_head
+            cl_T_flat = cl_T[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
+            cl_B_flat = cl_B[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
+            us_T_flat = us_T[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
+            us_B_flat = us_B[:, :num_layers, :, :].reshape(-1, num_layers, hidden_dim)
         
         similarities_cpca = []
         

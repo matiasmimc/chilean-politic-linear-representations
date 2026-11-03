@@ -82,18 +82,15 @@ def train_bcall_probes_for_file(features_path, df_parq, df_bcall, output_dir, fo
     if np.isnan(features).any():
         features = np.nan_to_num(features, nan=0.0)
 
-    num_statements, num_layers, num_heads, d_head = features.shape
-    
-    performance_d1 = np.zeros((num_layers, num_heads))
-    performance_d2 = np.zeros((num_layers, num_heads))
-    ridge_dict = {'d1': {}, 'd2': {}}
+    if features.ndim == 3:
+        num_statements, num_layers, d_model = features.shape
+        performance_d1 = np.zeros((num_layers,))
+        performance_d2 = np.zeros((num_layers,))
+        ridge_dict = {'d1': {}, 'd2': {}}
 
-    for i in tqdm(range(num_layers), desc="Procesando Capas"):
-        ridge_dict['d1'][i] = {}
-        ridge_dict['d2'][i] = {}
-        for j in range(num_heads):
+        for i in tqdm(range(num_layers), desc="Procesando Capas (Residual)"):
             kf = KFold(n_splits=2, shuffle=True, random_state=42)
-            X = features[:, i, j, :]
+            X = features[:, i, :]
             
             # Entrenar D1 (Ideología)
             sc_d1 = 0
@@ -103,9 +100,9 @@ def train_bcall_probes_for_file(features_path, df_parq, df_bcall, output_dir, fo
                 preds = model_d1.predict(X[test_idx])
                 s = spearmanr(d1_labels[test_idx], preds).statistic
                 if not np.isnan(s): sc_d1 += s
-            performance_d1[i, j] = sc_d1 / 2
-            model_d1.fit(X, d1_labels) # Fit final en todos los datos
-            ridge_dict['d1'][i][j] = model_d1
+            performance_d1[i] = sc_d1 / 2
+            model_d1.fit(X, d1_labels)
+            ridge_dict['d1'][i] = model_d1
             
             # Entrenar D2 (Volatilidad / Cohesión)
             sc_d2 = 0
@@ -115,10 +112,47 @@ def train_bcall_probes_for_file(features_path, df_parq, df_bcall, output_dir, fo
                 preds = model_d2.predict(X[test_idx])
                 s = spearmanr(d2_labels[test_idx], preds).statistic
                 if not np.isnan(s): sc_d2 += s
-            performance_d2[i, j] = sc_d2 / 2
+            performance_d2[i] = sc_d2 / 2
             model_d2.fit(X, d2_labels)
-            ridge_dict['d2'][i][j] = model_d2
+            ridge_dict['d2'][i] = model_d2
+    else:
+        num_statements, num_layers, num_heads, d_head = features.shape
+        
+        performance_d1 = np.zeros((num_layers, num_heads))
+        performance_d2 = np.zeros((num_layers, num_heads))
+        ridge_dict = {'d1': {}, 'd2': {}}
+
+        for i in tqdm(range(num_layers), desc="Procesando Capas"):
+            ridge_dict['d1'][i] = {}
+            ridge_dict['d2'][i] = {}
+            for j in range(num_heads):
+                kf = KFold(n_splits=2, shuffle=True, random_state=42)
+                X = features[:, i, j, :]
                 
+                # Entrenar D1 (Ideología)
+                sc_d1 = 0
+                model_d1 = Ridge(alpha=1, fit_intercept=True)
+                for train_idx, test_idx in kf.split(X):
+                    model_d1.fit(X[train_idx], d1_labels[train_idx])
+                    preds = model_d1.predict(X[test_idx])
+                    s = spearmanr(d1_labels[test_idx], preds).statistic
+                    if not np.isnan(s): sc_d1 += s
+                performance_d1[i, j] = sc_d1 / 2
+                model_d1.fit(X, d1_labels) # Fit final en todos los datos
+                ridge_dict['d1'][i][j] = model_d1
+                
+                # Entrenar D2 (Volatilidad / Cohesión)
+                sc_d2 = 0
+                model_d2 = Ridge(alpha=1, fit_intercept=True)
+                for train_idx, test_idx in kf.split(X):
+                    model_d2.fit(X[train_idx], d2_labels[train_idx])
+                    preds = model_d2.predict(X[test_idx])
+                    s = spearmanr(d2_labels[test_idx], preds).statistic
+                    if not np.isnan(s): sc_d2 += s
+                performance_d2[i, j] = sc_d2 / 2
+                model_d2.fit(X, d2_labels)
+                ridge_dict['d2'][i][j] = model_d2
+                    
     perf_dict = {'d1': performance_d1, 'd2': performance_d2}
     
     with open(perf_path, 'wb') as f:

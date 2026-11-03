@@ -110,7 +110,7 @@ def extract_activations(model, statements, target="attention"):
     return features
 
 
-def build_prompts(df, tokenizer, names_only=False):
+def build_prompts(df, tokenizer, names_only=False, no_party=False):
     statements = []
     for _, row in df.iterrows():
         name = row['Name']
@@ -136,7 +136,8 @@ def build_prompts(df, tokenizer, names_only=False):
             else:
                 prompt_intervenciones = "\nNo hay intervenciones registradas.\n"
             
-        messages = [{"role": "user", "content": f"Genera una declaración de {name}, parlamentario/a en Chile del partido {party}.{prompt_intervenciones}"}]
+        party_txt = "" if no_party else f" del partido {party}"
+        messages = [{"role": "user", "content": f"Genera una declaración de {name}, parlamentario/a en Chile{party_txt}.{prompt_intervenciones}"}]
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompt_text += f"En 2025, {name} dijo que"
 
@@ -152,12 +153,15 @@ def main():
     parser.add_argument("--names-only", action="store_true", help="Extraer solo usando nombres (sin declaraciones/intervenciones).")
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["float16", "bfloat16", "float32"], help="Tipo de dato para cargar el modelo.")
     parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
+    parser.add_argument("--no-party", action="store_true", help="Omitir el partido en el prompt (control: separar ideologia de identidad de partido).")
     parser.add_argument("--force", action="store_true", help="Sobrescribir si el archivo ya existe.")
     args = parser.parse_args()
 
     # Definir directorio de salida
     if args.results_dir:
         results_dir = Path(args.results_dir)
+    elif args.no_party:
+        results_dir = BASE_DIR / ("results/replication/v3_noparty_names_only" if args.names_only else "results/replication/v3_noparty")
     elif args.names_only:
         results_dir = BASE_DIR / "results/replication/v2_names_only"
     else:
@@ -210,7 +214,7 @@ def main():
 
         # Preparar prompts
         print("Preparando prompts...")
-        statements = build_prompts(df, tokenizer, names_only=args.names_only)
+        statements = build_prompts(df, tokenizer, names_only=args.names_only, no_party=args.no_party)
         
         # Guardar prompts
         with open(results_dir / f"{safe_name}_politicians.pkl", 'wb') as f:

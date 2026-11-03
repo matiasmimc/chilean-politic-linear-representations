@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Configuración de Rutas
 SCRIPT_DIR = Path(__file__).resolve().parent
-BASE_DIR = SCRIPT_DIR.parent
+BASE_DIR = SCRIPT_DIR.parent.parent
 DATA_DIR = BASE_DIR / "data"
 RESULTS_DIR = BASE_DIR / "results/us_analysis"
 MODEL_CACHE = BASE_DIR / "model"
@@ -61,7 +61,23 @@ def get_attention_heads(model):
         
     return heads
 
-def extract_attention_head_activations(model, statements):
+def extract_activations_us_70b(model, statements, target="attention"):
+    try:
+        input_device = model.get_input_embeddings().weight.device
+    except Exception:
+        input_device = next(model.parameters()).device
+
+    if target == "residual":
+        features = []
+        for prompt in tqdm(statements, desc="Extrayendo residual stream (US 70B 8-bit)", total=len(statements)):
+            with torch.no_grad():
+                outputs = model(prompt.to(input_device), output_hidden_states=True)
+                hidden_states = torch.stack(outputs.hidden_states[1:]).squeeze() # [layers, seq, d_model]
+                last_token_states = hidden_states[-1, :].cpu().float().numpy() if hidden_states.ndim == 2 else hidden_states[:, -1, :].cpu().float().numpy()
+                features.append(last_token_states.copy())
+        features = np.stack(features, axis=0) # [num_statements, layers, d_model]
+        return features
+
     HEADS = get_attention_heads(model)
     
     num_heads = getattr(model.config, "num_attention_heads", getattr(model.config, "n_head", None))
@@ -69,11 +85,6 @@ def extract_attention_head_activations(model, statements):
         num_heads = getattr(model.config.text_config, "num_attention_heads", None)
         
     features = []
-    
-    try:
-        input_device = model.get_input_embeddings().weight.device
-    except Exception:
-        input_device = next(model.parameters()).device
     
     for prompt in tqdm(statements, desc="Extrayendo activaciones (US 70B 8-bit)", total=len(statements)):
         with torch.no_grad():
@@ -109,8 +120,14 @@ def clean_bioname(bioname):
 def main():
     parser = argparse.ArgumentParser(description="Extracción de activaciones para US Politicians con modelos 70B (8-bits y multi-GPU).")
     parser.add_argument("--model", type=str, default=None, help="Nombre o filtro del modelo a procesar (opcional).")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de extracción (cabezas de atención o residual stream).")
     parser.add_argument("--cache-dir", type=str, default=str(MODEL_CACHE), help="Directorio del caché de los modelos descargados.")
     args = parser.parse_args()
+
+    results_dir = RESULTS_DIR
+    if args.target == "residual":
+        results_dir = results_dir / "residual"
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     # Cargar CSV de Nominate
     csv_path = DATA_DIR / "EEUU-nominate.csv"
@@ -133,7 +150,7 @@ def main():
     df['Ideology'] = df['nominate_dim1'].astype(float)
     df['Party'] = df['party_code'].map({100: 'Democrat', 200: 'Republican'})
     
-    df.to_parquet(RESULTS_DIR / "us_politicians.parquet")
+    df.to_parquet(results_dir / "us_politicians.parquet")
 
     # Modelos 70B a ejecutar en paralelo cuantizados en 8-bits
     models = [
@@ -157,7 +174,7 @@ def main():
         print(f"\n--- Procesando modelo 70B: {model_name} (US Politicians - 8-bits / Multi-GPU) ---")
         safe_name = model_name.replace("/", "_")
         
-        output_path = RESULTS_DIR / f"{safe_name}_politician_features.pkl"
+        output_path = results_dir / f"{safe_name}_politician_features.pkl"
         if output_path.exists():
             print(f"Activaciones ya extraídas para {model_name} en {output_path}. Saltando...")
             continue
@@ -186,7 +203,7 @@ def main():
             statements.append(tokenizer(prompt_text, return_tensors="pt")['input_ids'])
         
         labels = np.array(df['Ideology'].astype(float))
-        features = extract_attention_head_activations(model, statements)
+        features = extract_activations_us_70b(model, statements, target=args.target)
         
         with open(output_path, 'wb') as f:
             pickle.dump((features, labels), f)

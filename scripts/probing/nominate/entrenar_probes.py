@@ -115,6 +115,7 @@ def main():
     parser.add_argument("--mode", type=str, choices=["full", "names_only"], default="names_only", help="Modo de evaluación: 'full' usa activaciones con intervenciones, 'names_only' usa solo nombres.")
     parser.add_argument("--results-dir", type=str, default=None, help="Directorio donde residen los archivos de activaciones. Si no se provee, se infiere del --mode.")
     parser.add_argument("--model", type=str, default=None, help="Nombre o filtro de modelo a procesar (opcional).")
+    parser.add_argument("--target", type=str, choices=["attention", "residual"], default=None, help="Tipo de activaciones: attention o residual.")
     parser.add_argument("--force", action="store_true", help="Forzar reentrenamiento aunque ya existan los resultados.")
     args = parser.parse_args()
 
@@ -122,6 +123,10 @@ def main():
         results_dir = Path(args.results_dir)
     else:
         results_dir = DEFAULT_RESULTS_DIR_FULL if args.mode == "full" else DEFAULT_RESULTS_DIR_NAMES
+        
+    if args.target == "residual" and not str(results_dir).endswith("residual"):
+        results_dir = results_dir / "residual"
+
     if not results_dir.exists():
         print(f"Error: No existe el directorio {results_dir}")
         return

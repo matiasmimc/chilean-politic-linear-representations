@@ -85,17 +85,23 @@ def get_pca_first_component(features_flat):
 def main():
     parser = argparse.ArgumentParser(description="Compara la similitud de la Dimensión Ideológica entre Chile y EEUU.")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+    parser.add_argument("--target", type=str, default="attention", choices=["attention", "residual"], help="Objetivo de representación (attention o residual).")
     args = parser.parse_args()
 
     model_name = args.model
     safe_name = model_name.replace("/", "_")
     
+    chile_dir = CHILE_DIR / "residual" if args.target == "residual" else CHILE_DIR
+    us_dir = US_DIR / "residual" if args.target == "residual" else US_DIR
+    figures_dir = FIGURES_DIR / "residual" if args.target == "residual" else FIGURES_DIR
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"\n{'='*60}")
-    print(f"Análisis Cross-Lingual de Ideología | Modelo: {model_name}")
+    print(f"Análisis Cross-Lingual de Ideología | Modelo: {model_name} | Target: {args.target}")
     print(f"{'='*60}")
     
-    chile_path = CHILE_DIR / f"{safe_name}_politician_features.pkl"
-    us_path = US_DIR / f"{safe_name}_politician_features.pkl"
+    chile_path = chile_dir / f"{safe_name}_politician_features.pkl"
+    us_path = us_dir / f"{safe_name}_politician_features.pkl"
     
     if not chile_path.exists():
         print(f"Error: Faltan activaciones de Chile en {chile_path}")
@@ -108,17 +114,30 @@ def main():
     with open(chile_path, 'rb') as f:
         chile_features, chile_labels = pickle.load(f)
         
-    num_stmts_cl, num_layers, num_heads, d_head = chile_features.shape
-    hidden_dim = num_heads * d_head
-    chile_flat = chile_features.reshape(num_stmts_cl, num_layers, hidden_dim)
+    if isinstance(chile_features, list): chile_features = np.stack(chile_features, axis=1)
     
     # 2. Cargar Activaciones de EEUU
     with open(us_path, 'rb') as f:
         us_features, us_labels = pickle.load(f)
         
+    if isinstance(us_features, list): us_features = np.stack(us_features, axis=1)
+
+    if chile_features.ndim == 3:
+        num_stmts_cl, num_layers_cl, hidden_dim = chile_features.shape
+        num_layers_us = us_features.shape[1]
+        num_layers = min(num_layers_cl, num_layers_us)
+        chile_flat = chile_features[:, :num_layers, :]
+        us_flat = us_features[:, :num_layers, :]
+    else:
+        num_stmts_cl, num_layers_cl, num_heads, d_head = chile_features.shape
+        num_layers_us = us_features.shape[1]
+        num_layers = min(num_layers_cl, num_layers_us)
+        hidden_dim = num_heads * d_head
+        chile_flat = chile_features[:, :num_layers, :, :].reshape(num_stmts_cl, num_layers, hidden_dim)
+        us_flat = us_features[:, :num_layers, :, :].reshape(us_features.shape[0], num_layers, hidden_dim)
+        
     num_stmts_us = us_features.shape[0]
-    us_flat = us_features.reshape(num_stmts_us, num_layers, hidden_dim)
-    
+
     # Igualar N y ALINEAR SEMÁNTICAMENTE por rango ideológico
     N_samples = min(num_stmts_cl, num_stmts_us)
     print(f"Alineando matrices por percentil ideológico: N = {N_samples}")
@@ -182,7 +201,7 @@ def main():
         
     plt.tight_layout()
     
-    fig_path = FIGURES_DIR / f"{safe_name}_crosslingual_similarity.png"
+    fig_path = figures_dir / f"{safe_name}_crosslingual_similarity.png"
     plt.savefig(fig_path, dpi=300)
     print(f"\n✅ Gráfico guardado en {fig_path}")
 
@@ -194,7 +213,7 @@ def main():
         "linear_cka": similarities_cka,
         "pwcca": similarities_pwcca
     }
-    json_path = FIGURES_DIR / f"{safe_name}_crosslingual_metrics.json"
+    json_path = figures_dir / f"{safe_name}_crosslingual_metrics.json"
     with open(json_path, 'w') as f:
         json.dump(metrics_data, f, indent=4)
     print(f"✅ Métricas guardadas en {json_path}")

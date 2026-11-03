@@ -66,7 +66,11 @@ def main(cfg: DictConfig):
     print("="*60)
 
     # Rutas de entrada relativas a la raíz del proyecto original (BASE_DIR)
+    target_mode = cfg.get("target", None)
     results_dir = BASE_DIR / cfg.paths.results_dir
+    if target_mode == "residual" and not str(results_dir).endswith("residual"):
+        results_dir = results_dir / "residual"
+
     bcall_path = BASE_DIR / cfg.paths.bcall_path
     mp_path = BASE_DIR / cfg.paths.mp_path
     
@@ -82,10 +86,15 @@ def main(cfg: DictConfig):
         'meta-llama/Llama-3.1-8B-Instruct',
         # 'Qwen/Qwen3.5-9B',
         'zai-org/GLM-4-9B-0414',
-        # 'mistralai/Ministral-3-8B-Instruct-2512',        
+        # 'mistralai/Mistral-3-8B-Instruct-2512',        
     ]
     
-    target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota.replace("/", "_") in f.name for sota in sota_models)]
+    model_filter = cfg.get("model", None)
+    if model_filter:
+        model_safe = model_filter.replace("/", "_")
+        target_files = [f for f in results_dir.glob("*_politician_features.pkl") if model_safe.lower() in f.name.lower()]
+    else:
+        target_files = [f for f in results_dir.glob("*_politician_features.pkl") if any(sota.replace("/", "_") in f.name for sota in sota_models)]
     
     if not target_files:
         print(f"No se encontraron archivos *_politician_features.pkl en {results_dir}")
@@ -246,7 +255,13 @@ def main(cfg: DictConfig):
             "pc2_bcall_alignment": pc2_bcall_alignment
         }
         
-        out_path = cpca_dir / f"{model_name}_cpca_analysis_global.pkl"
+        curr_cpca_dir = cpca_dir / "residual" if is_residual else cpca_dir
+        curr_figures_dir = figures_dir / "residual" if is_residual else figures_dir
+        curr_cpca_dir.mkdir(parents=True, exist_ok=True)
+        curr_figures_dir.mkdir(parents=True, exist_ok=True)
+
+        tag = cfg.get("cpca_tag", "")
+        out_path = curr_cpca_dir / f"{model_name}_cpca_analysis_global{tag}.pkl"
         with open(out_path, 'wb') as f:
             pickle.dump(out_dict, f)
             
@@ -270,7 +285,7 @@ def main(cfg: DictConfig):
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(figures_dir / f"{model_name}_cpca_alignment_{cfg.params.compare_target}.png", dpi=300)
+        plt.savefig(curr_figures_dir / f"{model_name}_cpca_alignment_{cfg.params.compare_target}{tag}.png", dpi=300)
         plt.close()
 
 if __name__ == "__main__":

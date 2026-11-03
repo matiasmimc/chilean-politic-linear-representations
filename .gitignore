@@ -1,10 +1,23 @@
+# Python / entornos
+__pycache__/
 *.pyc
 *.pyo
-__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+# Secretos
 .env
-.venv
+
+# Artefactos pesados (reproducibles)
+model/
 results/
+results_replication/
+outputs/
+logs/
+*.pkl
 *.tar.gz
+
+# Local / agentes
 .agents/
 log.md
-references/
+skills/

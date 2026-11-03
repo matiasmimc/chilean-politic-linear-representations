@@ -21,6 +21,7 @@ dependencies = [
     "ipykernel>=7.4.0",
     "matplotlib-inline>=0.2.2",
     "stack-data>=0.6.3",
+    "tabulate>=0.10.0",
 ]
 
 [tool.uv.sources]

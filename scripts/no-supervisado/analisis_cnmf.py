@@ -113,17 +113,22 @@ def main(cfg: DictConfig):
         with open(b_file, 'rb') as f:
             b_features, _ = pickle.load(f)
             
-        num_statements_t, num_layers_t, num_heads_t, d_head_t = t_features.shape
-        num_statements_b, num_layers_b, num_heads_b, d_head_b = b_features.shape
-        
-        if num_layers_t != num_layers_b:
-            print(f"⚠️ Advertencia: Discrepancia en número de capas (Target: {num_layers_t}, Background: {num_layers_b}).")
-            
-        num_layers = min(num_layers_t, num_layers_b)
-        hidden_dim = num_heads_t * d_head_t
-        
-        t_flat = t_features[:, :num_layers, :, :].reshape(num_statements_t, num_layers, hidden_dim)
-        b_flat = b_features[:, :num_layers, :, :].reshape(num_statements_b, num_layers, hidden_dim)
+        is_residual = t_features.ndim == 3
+        if is_residual:
+            num_statements_t, num_layers_t, hidden_dim = t_features.shape
+            num_statements_b, num_layers_b, _ = b_features.shape
+            num_layers = min(num_layers_t, num_layers_b)
+            t_flat = t_features[:, :num_layers, :]
+            b_flat = b_features[:, :num_layers, :]
+        else:
+            num_statements_t, num_layers_t, num_heads_t, d_head_t = t_features.shape
+            num_statements_b, num_layers_b, num_heads_b, d_head_b = b_features.shape
+            if num_layers_t != num_layers_b:
+                print(f"⚠️ Advertencia: Discrepancia en número de capas (Target: {num_layers_t}, Background: {num_layers_b}).")
+            num_layers = min(num_layers_t, num_layers_b)
+            hidden_dim = num_heads_t * d_head_t
+            t_flat = t_features[:, :num_layers, :, :].reshape(num_statements_t, num_layers, hidden_dim)
+            b_flat = b_features[:, :num_layers, :, :].reshape(num_statements_b, num_layers, hidden_dim)
         
         all_cnmf_components = []
         total_target_pseudo_variance = 0.0
@@ -198,7 +203,10 @@ def main(cfg: DictConfig):
             "total_target_pseudo_variance": total_target_pseudo_variance
         }
         
-        out_path = cnmf_dir / f"{model_name}_cnmf_analysis_global.pkl"
+        curr_cnmf_dir = cnmf_dir / "residual" if is_residual else cnmf_dir
+        curr_cnmf_dir.mkdir(parents=True, exist_ok=True)
+
+        out_path = curr_cnmf_dir / f"{model_name}_cnmf_analysis_global.pkl"
         with open(out_path, 'wb') as f:
             pickle.dump(out_dict, f)
             

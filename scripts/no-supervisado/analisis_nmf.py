@@ -99,9 +99,14 @@ def main():
         if labels_bcall is None:
             labels_bcall = labels_nominate
             
-        num_statements, num_layers, num_heads, d_head = features.shape
-        hidden_dim = num_heads * d_head
-        features_flat = features.reshape(num_statements, num_layers, hidden_dim)
+        is_residual = features.ndim == 3
+        if is_residual:
+            num_statements, num_layers, hidden_dim = features.shape
+            features_flat = features
+        else:
+            num_statements, num_layers, num_heads, d_head = features.shape
+            hidden_dim = num_heads * d_head
+            features_flat = features.reshape(num_statements, num_layers, hidden_dim)
         
         all_nmf_components = []
         total_pseudo_variance = 0.0
@@ -171,7 +176,10 @@ def main():
             "total_pseudo_variance": total_pseudo_variance
         }
         
-        out_path = nmf_dir / f"{model_name}_nmf_analysis_global.pkl"
+        curr_nmf_dir = nmf_dir / "residual" if is_residual else nmf_dir
+        curr_nmf_dir.mkdir(parents=True, exist_ok=True)
+
+        out_path = curr_nmf_dir / f"{model_name}_nmf_analysis_global.pkl"
         with open(out_path, 'wb') as f:
             pickle.dump(out_dict, f)
             
