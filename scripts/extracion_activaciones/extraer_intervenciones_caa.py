@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 MODEL_CACHE = BASE_DIR / "model"
@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=350, help="tokens maximos por intervencion")
     ap.add_argument("--per-statement", action="store_true",
                     help="guardar la activacion media de CADA intervencion (para controlar por tema), en float16")
+    ap.add_argument("--model-path", default=None, help="carpeta local del modelo (si no, se descarga/usa la cache por nombre); --model sigue dando el nombre de los archivos")
+    ap.add_argument("--load-8bit", action="store_true", help="cargar en 8 bits (modelos 70B, varias GPU)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     safe = args.model.replace("/", "_")
@@ -39,9 +41,11 @@ def main():
         return
 
     df = pd.read_parquet(BASE_DIR / "data/congreso_2022_2026_20intervenciones.parquet")
-    tok = AutoTokenizer.from_pretrained(args.model, cache_dir=str(MODEL_CACHE))
-    model = AutoModelForCausalLM.from_pretrained(args.model, cache_dir=str(MODEL_CACHE), low_cpu_mem_usage=True,
-                                                 torch_dtype=torch.bfloat16, device_map="auto").eval()
+    tok = AutoTokenizer.from_pretrained(args.model_path or args.model, cache_dir=str(MODEL_CACHE))
+    kw = {"quantization_config": BitsAndBytesConfig(load_in_8bit=True), "torch_dtype": torch.float16} if args.load_8bit \
+        else {"torch_dtype": torch.bfloat16}
+    model = AutoModelForCausalLM.from_pretrained(args.model_path or args.model, cache_dir=str(MODEL_CACHE), low_cpu_mem_usage=True,
+                                                 device_map="auto", **kw).eval()
     prefix = tok.apply_chat_template([{"role": "user", "content": INSTRUCCION}], tokenize=False, add_generation_prompt=True)
     prefix_ids = tok(prefix, add_special_tokens=False)["input_ids"]
 

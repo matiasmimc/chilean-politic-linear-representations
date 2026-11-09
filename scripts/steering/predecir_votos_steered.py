@@ -197,6 +197,34 @@ def get_real_bills_for_mp(mp_uid, limit=25, seed=42, bill_filter=None):
         bills = [bills[i] for i in idx]
     return bills
 
+VOTE_RE = re.compile(r'\b(A FAVOR|EN CONTRA)\b')
+
+def parse_vote(response):
+    """Primer voto explícito de la respuesta; con \\b evita calzar dentro de 'podría favorecer'."""
+    m = VOTE_RE.search(response.upper())
+    return m.group(1) if m else "INDECISO"
+
+def check_mp_ids(df_target):
+    """Cruza el Id del parquet (diputadoid) con el mp_uid obtenido por nombre y reporta discrepancias."""
+    with sqlite3.connect(DB_PATH) as conn:
+        n_votes = dict(conn.execute("SELECT mp_uid, COUNT(*) FROM votos_parlamentario GROUP BY mp_uid").fetchall())
+        by_dip = dict(conn.execute("SELECT diputadoid, mp_uid FROM dim_parlamentario WHERE diputadoid IS NOT NULL").fetchall())
+    sin_match, sin_votos, distinto = [], [], []
+    for _, row in df_target.iterrows():
+        uid = get_mp_uid_by_name(row['Name'])
+        if uid is None:
+            sin_match.append(row['Name'])
+            continue
+        if not n_votes.get(uid):
+            sin_votos.append(f"{row['Name']} (mp_uid {uid})")
+        id_uid = by_dip.get(str(row['Id']))
+        if id_uid is not None and id_uid != uid:
+            distinto.append(f"{row['Name']}: nombre->{uid}, Id {row['Id']}->{id_uid}")
+    print(f"[IDs] sin match por nombre: {len(sin_match)} | sin votos: {len(sin_votos)} | Id y nombre discrepan: {len(distinto)}")
+    for lbl, items in (("sin match", sin_match), ("sin votos (excluidos)", sin_votos), ("discrepancia Id/nombre", distinto)):
+        for it in items:
+            print(f"  [{lbl}] {it}")
+
 def get_mp_uid_by_name(nombre):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.cursor()
@@ -234,6 +262,7 @@ def create_or_load_tasks(df_target, limit_mps, curr_output_dir, calib_ratio=0.2,
         print(f"ERROR: No se encuentra la BD de proyectos en {DB_PATH}.")
         sys.exit(1)
 
+    check_mp_ids(df_target)
     tasks = []
     for row_idx, row in df_target.iterrows():
         nombre = row['Name']
@@ -434,7 +463,7 @@ def run_batch_inference(
         
         for task, response in zip(batch_tasks, responses):
             response = response.strip()
-            predicted_vote = "A FAVOR" if "A FAVOR" in response.upper() else ("EN CONTRA" if "EN CONTRA" in response.upper() else "INDECISO")
+            predicted_vote = parse_vote(response)
             is_match = (predicted_vote == task["voto_real"])
             
             results.append({

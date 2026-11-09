@@ -21,3 +21,7 @@ logs/
 .agents/
 log.md
 skills/
+
+# Datos no publicables
+data/noticias_chile_2022_2026_keywords.parquet
+scripts/*/cola*.sh

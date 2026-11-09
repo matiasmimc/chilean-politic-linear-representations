@@ -58,6 +58,7 @@ def topic_contrast(acts, topic, side, train_mask, n_topics, min_per_side=3):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
+    ap.add_argument("--model-path", default=None, help="carpeta local del modelo (si no, se descarga/usa la cache por nombre); --model sigue dando el nombre de los archivos")
     ap.add_argument("--q", type=float, default=0.25)
     ap.add_argument("--topics", type=int, default=20)
     args = ap.parse_args()
@@ -65,7 +66,7 @@ def main():
 
     df = pd.read_parquet(BASE_DIR / "data/congreso_2022_2026_20intervenciones.parquet")
     d = pickle.load(open(OUT_DIR / f"{safe}_statement_acts.pkl", "rb"))
-    tok = AutoTokenizer.from_pretrained(args.model, cache_dir=str(MODEL_CACHE))
+    tok = AutoTokenizer.from_pretrained(args.model_path or args.model, cache_dir=str(MODEL_CACHE))
     st = stmt_texts(df, tok)
     assert len(st) == len(d["acts"]) and np.array_equal(np.array([m for m, _ in st]), d["mp_idx"]), \
         f"desalineado: {len(st)} textos vs {len(d['acts'])} activaciones"
